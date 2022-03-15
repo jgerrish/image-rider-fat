@@ -1,0 +1,31 @@
+[package]
+name = "image-rider-fat"
+version = "0.1.0"
+edition = "2021"
+authors = ["Joshua Gerrish <jgerrish@gmail.com>"]
+description = "Rust nom parser to read FAT file systems"
+keywords = ["fat", "fat12", "dos", "filesystem", "tui", "terminal", "cli", "diskimage", "rom", "image", "emu", "parser", "nom"]
+readme = "README.md"
+repository = "https://github.com/jgerrish/image-rider-fat"
+homepage = "https://github.com/jgerrish/image-rider-fat"
+license = "MIT"
+
+# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
+
+[dependencies]
+config = "0.12"
+unicode-width = "0.1"
+clap = { version = "3.1", features = ["derive"] }
+log = "0.4"
+env_logger = "0.9"
+i18n-embed = { version = "0.13", features = ["fluent-system", "desktop-requester"] }
+rust-embed = "6.3"
+toml = "0.5"
+toml-query = "0.9"
+insta = "1.12"
+nom = "7.1"
+time = "0.3"
+
+[dev-dependencies]
+pretty_assertions = "1.1"
+criterion = "0.3"
