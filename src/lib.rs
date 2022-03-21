@@ -5,6 +5,9 @@
 /// MS-DOS FAT disk images
 pub mod fat;
 
+/// File Allocation Table Cluster functions and data structures
+pub mod cluster;
+
 /// SanityCheck trait
 pub mod sanity_check;
 

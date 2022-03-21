@@ -27,6 +27,11 @@ struct Args {
     /// This forces some internal parse paths even if auto-detection fails
     #[clap(short, long)]
     filesystem_type: Option<String>,
+
+    /// Explicitly specify a root directory location
+    /// The location is an absolute address
+    #[clap(short, long)]
+    root_directory_location: Option<u32>,
 }
 
 /// Open up a file and read in the data
@@ -83,7 +88,7 @@ fn main() {
     let data = open_file(&args.input);
 
     // Parse the image data
-    let result = fat_disk_parser(&args.filesystem_type)(&data);
+    let result = fat_disk_parser(&args.filesystem_type, &args.root_directory_location)(&data);
 
     let (_, _image) = match result {
         Err(e) => {

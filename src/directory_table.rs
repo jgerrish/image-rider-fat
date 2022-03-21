@@ -1,5 +1,6 @@
 /// Parse a FAT directory table
 /// This doesn't include any support for VFAT long filenames or other newer features
+use log::debug;
 use nom::bytes::complete::take;
 use nom::number::complete::{le_u16, le_u32, le_u8};
 use nom::IResult;
@@ -11,7 +12,20 @@ use std::fmt::{Display, Formatter, Result};
 /// If it is zero, the directory entry is available and there are no further entries
 pub enum FileType {
     Normal(FATDirectoryEntry),
+    DeletedEntry(FATDirectoryEntry),
     LastEntry,
+}
+
+/// Display a FAT File Directory Entry
+impl Display for FileType {
+    fn fmt(&self, f: &mut Formatter<'_>) -> Result {
+        match self {
+            FileType::Normal(entry) => write!(f, "{}", entry)?,
+            FileType::LastEntry => write!(f, "LastEntry")?,
+            FileType::DeletedEntry(entry) => write!(f, "DeletedEntry: {}", entry)?,
+        }
+        writeln!(f)
+    }
 }
 
 /// TODO: Get these values correct
@@ -74,36 +88,37 @@ pub fn reserved_date_display(option: Option<Date>) -> String {
     }
 }
 
+/// A formatter for displaying FAT directory entries
 impl Display for FATDirectoryEntry {
     fn fmt(&self, f: &mut Formatter<'_>) -> Result {
-        write!(f, "filename: {}.{}, ", self.filename, self.file_extension)?;
-        write!(
-            f,
-            "last_create_time: {}, ",
-            reserved_time_display(self.create_time)
-        )?;
-        write!(
-            f,
-            "last_create_date: {}, ",
-            reserved_date_display(self.create_date)
-        )?;
-        write!(
-            f,
-            "last_access_date: {}, ",
-            reserved_date_display(self.last_access_date)
-        )?;
-        write!(
-            f,
-            "last_modified_time: {}, ",
-            reserved_time_display(self.last_modified_time)
-        )?;
-        write!(
-            f,
-            "last_modified_date: {}, ",
-            reserved_date_display(self.last_modified_date)
-        )?;
-        write!(f, "start_of_file: {}, ", self.start_of_file)?;
-        write!(f, "file size: {}", self.file_size)?;
+        let mut fn_len = 0;
+        write!(f, "{}", self.filename)?;
+        fn_len += self.filename.len();
+        if !self.file_extension.is_empty() {
+            write!(f, ".{}", self.file_extension)?;
+            fn_len += self.file_extension.len() + 1;
+        }
+        write!(f, "{:1$}", "", 20 - fn_len)?;
+        // write!(
+        //     f,
+        //     "last_create_time: {}, ",
+        //     reserved_time_display(self.create_time)
+        // )?;
+        // write!(
+        //     f,
+        //     "last_create_date: {}, ",
+        //     reserved_date_display(self.create_date)
+        // )?;
+        // write!(
+        //     f,
+        //     "last_access_date: {}, ",
+        //     reserved_date_display(self.last_access_date)
+        // )?;
+        write!(f, "{:>10} ", self.file_size)?;
+        write!(f, "start_of_file: 0x{:<4X}, ", self.start_of_file)?;
+        write!(f, "{} ", reserved_date_display(self.last_modified_date))?;
+        write!(f, "{}", reserved_time_display(self.last_modified_time))?;
+
         writeln!(f)
     }
 }
@@ -111,7 +126,7 @@ impl Display for FATDirectoryEntry {
 /// FAT Directory Table
 pub struct FATDirectory {
     /// The directory entries
-    pub directory_entries: Vec<FATDirectoryEntry>,
+    pub directory_entries: Vec<FileType>,
 }
 
 impl Display for FATDirectory {
@@ -134,9 +149,22 @@ pub fn fat_directory_entry_parser(i: &[u8]) -> IResult<&[u8], FileType> {
         return Ok((i, FileType::LastEntry));
     }
 
+    let mut deleted_file = false;
+    // Deleted entry
+    let filename_padded = if filename_padded[0] == 0xE5 {
+        debug!("Found deleted file");
+        deleted_file = true;
+        let mut fn_padded = filename_padded.to_vec();
+        // Use an underscore prefix for deleted files
+        fn_padded[0] = 0x5F;
+        fn_padded
+    } else {
+        filename_padded.to_vec()
+    };
+
     // filenames are encoded in ECMA-6 according to ECMA-107 section 8.5 and section
     // 11.4.1 for filenames
-    let filename_result = String::from_utf8(filename_padded.to_vec());
+    let filename_result = String::from_utf8(filename_padded);
     // If this fails here, it means we have an invalid filesystem
     // fail out if that is the case.
     let filename = match filename_result {
@@ -146,6 +174,7 @@ pub fn fat_directory_entry_parser(i: &[u8]) -> IResult<&[u8], FileType> {
             // return Err(Err::Error(nom::error_position!(i, ErrorKind::Fail)));
         }
     };
+    debug!("Read filename: {}", filename);
     let filename = String::from(filename.trim_end_matches(' '));
 
     let (i, file_extension_padded) = take(3_usize)(i)?;
@@ -189,7 +218,11 @@ pub fn fat_directory_entry_parser(i: &[u8]) -> IResult<&[u8], FileType> {
         file_size,
     };
 
-    Ok((i, FileType::Normal(fat_directory_entry)))
+    if deleted_file {
+        Ok((i, FileType::DeletedEntry(fat_directory_entry)))
+    } else {
+        Ok((i, FileType::Normal(fat_directory_entry)))
+    }
 }
 
 /// Parse a FAT Directory Table
@@ -204,10 +237,14 @@ pub fn fat_directory_parser(i: &[u8]) -> IResult<&[u8], FATDirectory> {
         index = i;
         match directory_entry {
             FileType::LastEntry => {
+                directory_entries.push(directory_entry);
                 stop = true;
             }
-            FileType::Normal(e) => {
-                directory_entries.push(e);
+            FileType::Normal(_) => {
+                directory_entries.push(directory_entry);
+            }
+            FileType::DeletedEntry(_) => {
+                directory_entries.push(directory_entry);
             }
         }
     }
@@ -296,6 +333,7 @@ mod tests {
                     assert_eq!(de.filename, "HELLO");
                     assert_eq!(de.file_extension, "CO");
                 }
+                FileType::DeletedEntry(_) => panic!("Should not be a deleted entry"),
             },
             Err(e) => panic!("Error parsing FAT12 Directory Entry: {}", e),
         }
@@ -328,6 +366,9 @@ mod tests {
                 FileType::Normal(_) => {
                     panic!("Should not be a normal directory entry")
                 }
+                FileType::DeletedEntry(_) => {
+                    panic!("Should not be a deleted directory entry")
+                }
             },
             Err(e) => panic!("Error parsing FAT12 Directory Entry: {}", e),
         }
@@ -350,8 +391,13 @@ mod tests {
 
         match directory_table_result {
             Ok((_i, directory_table)) => {
-                assert_eq!(directory_table.directory_entries.len(), 1);
-                assert_eq!(directory_table.directory_entries[0].filename, "HELLO");
+                // Should have one file and one LastEntry marker
+                assert_eq!(directory_table.directory_entries.len(), 2);
+                match &directory_table.directory_entries[0] {
+                    FileType::Normal(e) => assert_eq!(&e.filename, "HELLO"),
+                    FileType::LastEntry => panic!("Should not be a last entry"),
+                    FileType::DeletedEntry(_) => panic!("Should not be a deleted entry"),
+                }
             }
             Err(e) => panic!("Error parsing directory table: {}", e),
         }
