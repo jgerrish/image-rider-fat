@@ -1,4 +1,4 @@
-// 1/// MS-DOS FAT disk image parser
+/// MS-DOS FAT disk image parser
 #[warn(missing_docs)]
 #[warn(unsafe_code)]
 

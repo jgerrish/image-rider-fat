@@ -6,7 +6,10 @@ use nom::number::complete::{le_u16, le_u32, le_u8};
 use nom::IResult;
 use time::{Date, Month, Time};
 
-use std::fmt::{Display, Formatter, Result};
+use std::{
+    collections::HashMap,
+    fmt::{Display, Formatter, Result},
+};
 
 /// The first byte for a filename can have special values
 /// If it is zero, the directory entry is available and there are no further entries
@@ -29,7 +32,13 @@ impl Display for FileType {
 }
 
 /// TODO: Get these values correct
+#[derive(Clone, Debug, PartialEq)]
 pub struct FATDirectoryEntry {
+    // This is the raw directory entry as it exists on the disk
+    // This complicates the data structure
+    // pub raw_directory_entry: [u8; 32],
+    /// Filename and extension
+    pub full_filename: String,
     /// offset 0
     /// 8 byte filename, space padded on disk, but without the pads here
     pub filename: String,
@@ -117,9 +126,7 @@ impl Display for FATDirectoryEntry {
         write!(f, "{:>10} ", self.file_size)?;
         write!(f, "start_of_file: 0x{:<4X}, ", self.start_of_file)?;
         write!(f, "{} ", reserved_date_display(self.last_modified_date))?;
-        write!(f, "{}", reserved_time_display(self.last_modified_time))?;
-
-        writeln!(f)
+        write!(f, "{}", reserved_time_display(self.last_modified_time))
     }
 }
 
@@ -127,17 +134,24 @@ impl Display for FATDirectoryEntry {
 pub struct FATDirectory {
     /// The directory entries
     pub directory_entries: Vec<FileType>,
+
+    /// Indexed by filename
+    pub directory_by_filename: HashMap<String, FATDirectoryEntry>,
 }
 
 impl Display for FATDirectory {
     fn fmt(&self, f: &mut Formatter<'_>) -> Result {
-        write!(f, "entries: ")?;
+        writeln!(f, "entries:")?;
         for entry in &self.directory_entries {
             write!(f, "{}", entry)?;
         }
         writeln!(f)
     }
 }
+
+/// Parse a 8.3 short DOS filename, returning a String and optional extension
+/// TODO: Finish up
+pub fn parse_fat_filename(_filename: [u8; 8], _file_extension: [u8; 3]) {}
 
 /// TODO: Get these values correct
 pub fn fat_directory_entry_parser(i: &[u8]) -> IResult<&[u8], FileType> {
@@ -184,6 +198,11 @@ pub fn fat_directory_entry_parser(i: &[u8]) -> IResult<&[u8], FileType> {
         Err(e) => panic!("Invalid file extension: {}", e),
     };
     let file_extension = String::from(file_extension.trim_end_matches(' '));
+    let mut full_filename = filename.clone();
+    if !file_extension.is_empty() {
+        full_filename.push('.');
+        full_filename.push_str(&file_extension);
+    }
 
     let (i, file_attributes) = le_u8(i)?;
     let (i, user_attributes) = le_u8(i)?;
@@ -203,6 +222,7 @@ pub fn fat_directory_entry_parser(i: &[u8]) -> IResult<&[u8], FileType> {
     let (i, file_size) = le_u32(i)?;
 
     let fat_directory_entry = FATDirectoryEntry {
+        full_filename,
         filename,
         file_extension,
         file_attributes,
@@ -228,6 +248,7 @@ pub fn fat_directory_entry_parser(i: &[u8]) -> IResult<&[u8], FileType> {
 /// Parse a FAT Directory Table
 pub fn fat_directory_parser(i: &[u8]) -> IResult<&[u8], FATDirectory> {
     let mut directory_entries = Vec::new();
+    let mut directory_by_filename = HashMap::new();
     let mut stop = false;
     let mut index = i;
 
@@ -240,8 +261,11 @@ pub fn fat_directory_parser(i: &[u8]) -> IResult<&[u8], FATDirectory> {
                 directory_entries.push(directory_entry);
                 stop = true;
             }
-            FileType::Normal(_) => {
+            FileType::Normal(ref e) => {
+                let new_entry = e.clone();
                 directory_entries.push(directory_entry);
+                debug!("Adding filename: {}\n", new_entry.full_filename.clone());
+                directory_by_filename.insert(new_entry.full_filename.clone(), new_entry);
             }
             FileType::DeletedEntry(_) => {
                 directory_entries.push(directory_entry);
@@ -249,7 +273,13 @@ pub fn fat_directory_parser(i: &[u8]) -> IResult<&[u8], FATDirectory> {
         }
     }
 
-    Ok((index, FATDirectory { directory_entries }))
+    Ok((
+        index,
+        FATDirectory {
+            directory_entries,
+            directory_by_filename,
+        },
+    ))
 }
 
 pub fn parse_dos_time(dos_time: u16) -> Option<Time> {

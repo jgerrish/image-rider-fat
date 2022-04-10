@@ -29,10 +29,10 @@ pub struct FATDisk<'a> {
     pub fat_boot_sector: FATBootSector<'a>,
 
     /// The actual File Allocation Table
-    pub fat: FAT,
+    pub fat: FAT<'a>,
 
     /// The backup File Allocation Table
-    pub backup_fat: Option<FAT>,
+    pub backup_fat: Option<FAT<'a>>,
 
     /// The root directory table
     pub directory_table: FATDirectory,
@@ -656,7 +656,7 @@ pub fn fat_disk_parser<'a>(
 
         // skip over bad sectors or find a different way
         let i = if let Some(location) = root_dir_loc {
-            let (i, _) = take(location - 5600)(i)?;
+            let (i, _) = take(location - 5600 - 32)(i)?;
             i
         } else {
             i
@@ -679,12 +679,6 @@ pub fn fat_disk_parser<'a>(
         // We're in the data region
         // Read in the rest of the data
         let (i, data_region) = take(i.len())(i)?;
-
-        // TODO: Piece together files
-        // Each cluster == (logical_sectors_per_cluster * bytes_per_logical_sector) bytes
-        // Each file can be pieced together by concatenating the clusters specified in
-        // the chain
-        // Start at the start_of_file from the directory entry
 
         let fat_disk = FATDisk {
             fat_boot_sector,

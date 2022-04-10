@@ -2,14 +2,14 @@
 /// Usage: cargo run --example parser --input FILENAME
 ///
 use std::fs::File;
-use std::io::Read;
-use std::path::Path;
+use std::io::{Read, Write};
+use std::path::{Path, PathBuf};
 use std::process::exit;
 
 use clap::Parser;
 use config::Config;
 use env_logger;
-use log::{error, info};
+use log::{debug, error, info};
 
 use image_rider_fat::fat::fat_disk_parser;
 
@@ -25,13 +25,21 @@ struct Args {
     /// Currently allowed types are:
     /// AtariST, DOS2, DOS3
     /// This forces some internal parse paths even if auto-detection fails
-    #[clap(short, long)]
+    #[clap(long)]
     filesystem_type: Option<String>,
 
     /// Explicitly specify a root directory location
     /// The location is an absolute address
     #[clap(short, long)]
     root_directory_location: Option<u32>,
+
+    /// Specify a file to operate on
+    #[clap(short, long)]
+    filename: Option<String>,
+
+    /// Specify an output filename to write to
+    #[clap(short, long)]
+    output: Option<String>,
 }
 
 /// Open up a file and read in the data
@@ -90,7 +98,7 @@ fn main() {
     // Parse the image data
     let result = fat_disk_parser(&args.filesystem_type, &args.root_directory_location)(&data);
 
-    let (_, _image) = match result {
+    let (_, image) = match result {
         Err(e) => {
             error!("{}", e);
             exit(1);
@@ -100,6 +108,39 @@ fn main() {
             res
         }
     };
+
+    if args.filename.is_some() {
+        let file = image
+            .directory_table
+            .directory_by_filename
+            .get(args.filename.as_ref().unwrap());
+        match file {
+            Some(f) => {
+                debug!("{}: {}\n", &args.filename.unwrap(), f);
+                // dump the data
+                // In the real library,
+                // this would be pieced together by following the cluster chain
+                let start: usize = f.start_of_file as usize * 512;
+                let end: usize = start + f.file_size as usize;
+                if (end - start) > image.fat_boot_sector.bios_parameter_block.bytes_per_logical_sector as usize {
+                    panic!("File size is greater than cluster size");
+                }
+                let image_data = &image.data_region[start..end];
+
+                let filename = PathBuf::from(&args.output.unwrap());
+                let file_result = File::create(filename);
+                match file_result {
+                    Ok(mut file) => {
+                        let _res = file.write_all(&image_data);
+                    }
+                    Err(e) => error!("Error opening file: {}", e),
+                }
+            }
+            None => {
+                panic!("Invalid filename");
+            }
+        }
+    }
 
     exit(0);
 }
