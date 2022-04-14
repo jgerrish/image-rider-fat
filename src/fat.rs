@@ -655,26 +655,26 @@ pub fn fat_disk_parser<'a>(
         debug!("FAT: {}", fat1);
 
         // skip over bad sectors or find a different way
-        let i = if let Some(location) = root_dir_loc {
+        let (i, directory_table) = if let Some(location) = root_dir_loc {
+            let end_of_fat = i;
             let (i, _) = take(location - 5600 - 32)(i)?;
-            i
+            // Parse the root directory table
+            // This may be wrong if there is a bad sector in the first cluster:
+            // https://formats.kaitai.io/vfat/index.html
+            let (_i, directory_table) = fat_directory_parser(i)?;
+            (end_of_fat, directory_table)
         } else {
-            i
+            let (i, directory_table) = fat_directory_parser(i)?;
+            // Advance beyond the directory table
+            let remaining = (fat_boot_sector
+                .bios_parameter_block
+                .maximum_number_of_root_directory_entries
+                * 32) as usize
+                - (directory_table.directory_entries.len() * 32);
+
+            let (i, _) = take(remaining)(i)?;
+            (i, directory_table)
         };
-
-        // Parse the root directory table
-        // This may be wrong if there is a bad sector in the first cluster:
-        // https://formats.kaitai.io/vfat/index.html
-        let (i, directory_table) = fat_directory_parser(i)?;
-
-        // Advance beyond the directory table
-        let remaining = (fat_boot_sector
-            .bios_parameter_block
-            .maximum_number_of_root_directory_entries
-            * 32) as usize
-            - ((directory_table.directory_entries.len() + 1) * 32);
-
-        let (i, _) = take(remaining)(i)?;
 
         // We're in the data region
         // Read in the rest of the data

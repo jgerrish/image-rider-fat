@@ -13,3 +13,8 @@ pub mod sanity_check;
 
 /// FAT Directory Table parser
 pub mod directory_table;
+
+/// File-handling functions
+/// This module combines the directory table with the FAT cluster
+/// to piece together files
+pub mod file;

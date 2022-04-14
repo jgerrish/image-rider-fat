@@ -9,9 +9,10 @@ use std::process::exit;
 use clap::Parser;
 use config::Config;
 use env_logger;
-use log::{debug, error, info};
+use log::{error, info};
 
 use image_rider_fat::fat::fat_disk_parser;
+use image_rider_fat::file::get_file_data;
 
 /// Command line arguments to parse an image file
 #[derive(Parser, Debug)]
@@ -110,35 +111,15 @@ fn main() {
     };
 
     if args.filename.is_some() {
-        let file = image
-            .directory_table
-            .directory_by_filename
-            .get(args.filename.as_ref().unwrap());
-        match file {
-            Some(f) => {
-                debug!("{}: {}\n", &args.filename.unwrap(), f);
-                // dump the data
-                // In the real library,
-                // this would be pieced together by following the cluster chain
-                let start: usize = f.start_of_file as usize * 512;
-                let end: usize = start + f.file_size as usize;
-                if (end - start) > image.fat_boot_sector.bios_parameter_block.bytes_per_logical_sector as usize {
-                    panic!("File size is greater than cluster size");
-                }
-                let image_data = &image.data_region[start..end];
+        let image_data = get_file_data(image, &args.filename.as_ref().unwrap());
 
-                let filename = PathBuf::from(&args.output.unwrap());
-                let file_result = File::create(filename);
-                match file_result {
-                    Ok(mut file) => {
-                        let _res = file.write_all(&image_data);
-                    }
-                    Err(e) => error!("Error opening file: {}", e),
-                }
+        let filename = PathBuf::from(&args.output.unwrap());
+        let file_result = File::create(filename);
+        match file_result {
+            Ok(mut file) => {
+                let _res = file.write_all(&image_data);
             }
-            None => {
-                panic!("Invalid filename");
-            }
+            Err(e) => error!("Error opening file: {}", e),
         }
     }
 
