@@ -29,6 +29,10 @@ struct Args {
     #[clap(long)]
     filesystem_type: Option<String>,
 
+    /// Explicitly specify bits per FAT entry (e.g. FAT12, FAT16, FAT32) as number
+    #[clap(short = 'b', long)]
+    filesystem_bits: Option<u8>,
+
     /// Explicitly specify a root directory location
     /// The location is an absolute address
     #[clap(short, long)]
@@ -97,7 +101,11 @@ fn main() {
     let data = open_file(&args.input);
 
     // Parse the image data
-    let result = fat_disk_parser(&args.filesystem_type, &args.root_directory_location)(&data);
+    let result = fat_disk_parser(
+        &args.filesystem_type,
+        args.filesystem_bits,
+        &args.root_directory_location,
+    )(&data);
 
     let (_, image) = match result {
         Err(e) => {

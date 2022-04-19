@@ -19,7 +19,7 @@ use nom::{Err, IResult};
 
 use std::fmt::{Display, Formatter, Result};
 
-use crate::cluster::{fat_fat12_parser, FAT};
+use crate::cluster::{fat_fat12_parser, fat_fat16_parser, FAT};
 use crate::directory_table::{fat_directory_parser, FATDirectory};
 use crate::sanity_check::SanityCheck;
 
@@ -612,6 +612,7 @@ pub fn calculate_boot_sector_sum_from_words(sector_data: &[u8]) -> bool {
 /// Parse a DOS FAT image
 pub fn fat_disk_parser<'a>(
     filesystem_type: &'a Option<String>,
+    filesystem_bits: Option<u8>,
     root_dir_loc: &'a Option<u32>,
 ) -> impl Fn(&[u8]) -> IResult<&[u8], FATDisk> + 'a {
     move |i| {
@@ -641,18 +642,37 @@ pub fn fat_disk_parser<'a>(
         let (i, _) = take(offset)(i)?;
 
         // TODO: FAT12 or FAT16 should be dynamically determined
-        let (i, fat1) = fat_fat12_parser(&fat_boot_sector)(i)?;
+        let number_bits = filesystem_bits.unwrap_or(12);
+
+        let (i, fat1) = if number_bits == 12 {
+            let (i, res) = fat_fat12_parser(&fat_boot_sector)(i)?;
+            (i, FAT::FAT12(res))
+        } else if number_bits == 16 {
+            let (i, res) = fat_fat16_parser(&fat_boot_sector)(i)?;
+            (i, FAT::FAT16(res))
+        } else {
+            let (i, res) = fat_fat12_parser(&fat_boot_sector)(i)?;
+            (i, FAT::FAT12(res))
+        };
 
         // parse the backup FAT
         let (i, fat2) = if fat_boot_sector.bios_parameter_block.number_of_fats == 2 {
-            let (i, res) = fat_fat12_parser(&fat_boot_sector)(i)?;
-            (i, Some(FAT::FAT12(res)))
+            if number_bits == 12 {
+                let (i, res) = fat_fat12_parser(&fat_boot_sector)(i)?;
+                (i, Some(FAT::FAT12(res)))
+            } else if number_bits == 16 {
+                let (i, res) = fat_fat16_parser(&fat_boot_sector)(i)?;
+                (i, Some(FAT::FAT16(res)))
+            } else {
+                let (i, res) = fat_fat12_parser(&fat_boot_sector)(i)?;
+                (i, Some(FAT::FAT12(res)))
+            }
         } else {
             (i, None)
         };
 
         // Dump the FAT
-        debug!("FAT: {}", fat1);
+        // debug!("FAT: {}", fat1);
 
         // skip over bad sectors or find a different way
         let (i, directory_table) = if let Some(location) = root_dir_loc {
@@ -682,7 +702,7 @@ pub fn fat_disk_parser<'a>(
 
         let fat_disk = FATDisk {
             fat_boot_sector,
-            fat: FAT::FAT12(fat1),
+            fat: fat1,
             backup_fat: fat2,
             directory_table,
             data_region,

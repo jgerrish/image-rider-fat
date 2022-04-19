@@ -130,28 +130,51 @@ pub enum FAT16ClusterEntry {
     EndOfChainMarker(u16),
 }
 
+/// Parse a FAT16 value as a FAT16ClusterEntry
+pub fn parse_fat16_value(value: u16) -> FAT16ClusterEntry {
+    match value {
+        0x0000 => FAT16ClusterEntry::FreeCluster,
+        0x0001 => FAT16ClusterEntry::Reserved1,
+        0x0002..=0xFFEF => FAT16ClusterEntry::DataCluster(value),
+        0xFFF0..=0xFFF5 => FAT16ClusterEntry::Reserved2(value),
+        0xFFF6 => FAT16ClusterEntry::Reserved3,
+        0xFFF7 => FAT16ClusterEntry::BadCluster,
+        0xFFF8..=0xFFFF => FAT16ClusterEntry::EndOfChainMarker(value),
+    }
+}
+
 /// A DOS File Allocation Table (FAT)
 /// Each two-byte entry in FAT16 is little-endian
 #[derive(Debug, PartialEq)]
-pub struct FATFAT16 {
+pub struct FATFAT16<'a> {
     /// The FAT ID
     pub fat_id: u16,
+
     /// The FAT end-of-cluster-chain marker
     /// Usually 0xFFFF for FAT16, for some Atari ST disks it's 0x03FF
     pub eoc_marker: u16,
+
     /// The FAT entries / clusters
     /// These are in disk order, not chain order.  To use these cluster chains
     /// You need to walk the chain, finding the next cluster with the current value
     pub fat_clusters: Vec<Vec<u16>>,
+
     /// An index into the FAT chains
     /// The index key is the start of the chain, the value is a reference to the chain
     /// To build a file or directory, read in starting at the file start and then
     /// look up the next chain by adding two to the start file location
     pub fat_cluster_index: HashMap<u16, usize>,
+
+    /// The raw cluster data
+    /// Figure out how to name the IntoIterators and other support for this
+    /// The fat_cluster_index isn't needed with this
+    /// The raw_data includes all the File Allocation Table data, including the
+    /// FAT ID and EOC marker
+    pub raw_data: &'a [u8],
 }
 
-/// Display a File Allocation Table
-impl Display for FATFAT16 {
+/// Display a 16-bit File Allocation Table
+impl<'a> Display for FATFAT16<'a> {
     fn fmt(&self, f: &mut Formatter<'_>) -> Result {
         write!(f, "FAT ID: 0x{:X}, ", self.fat_id)?;
         write!(f, "EOC Marker: 0x{:X}, ", self.eoc_marker)?;
@@ -172,26 +195,25 @@ pub fn fat_fat16_parser<'a>(
     fat_boot_sector: &'a FATBootSector,
 ) -> impl Fn(&[u8]) -> IResult<&[u8], FATFAT16> + 'a {
     move |i| {
+        let mut cnt = 0;
+        let start_index = i;
+
         let (i, fat_id) = le_u16(i)?;
+        cnt += 2;
         let (i, eoc_marker) = le_u16(i)?;
+        cnt += 2;
 
         let mut fat_clusters = Vec::new();
 
-        debug!("EOC Marker: {:02X}", eoc_marker);
-
-        let mut cnt = 0;
         let mut index = i;
         let mut fat_entry: u16;
         let max = fat_boot_sector
             .bios_parameter_block
-            .bytes_per_logical_sector
-            * fat_boot_sector.bios_parameter_block.logical_sectors_per_fat;
-
-        // Note: this depends on integer division truncating the decimal
-        let max_truncated = max;
+            .bytes_per_logical_sector as u32
+            * fat_boot_sector.bios_parameter_block.logical_sectors_per_fat as u32;
 
         // parse all max bytes of the FAT
-        while cnt < max_truncated {
+        while cnt < max {
             let (index_new, fat_entry_new) = le_u16(index)?;
             cnt += 2;
             // There may be a better pattern for this
@@ -200,7 +222,7 @@ pub fn fat_fat16_parser<'a>(
 
             let mut chain = Vec::new();
             // read until the EOC marker is found
-            while (cnt < max_truncated) && (fat_entry != eoc_marker) {
+            while (cnt < max) && (fat_entry != eoc_marker) {
                 chain.push(fat_entry);
                 let result = le_u16(index)?;
                 cnt += 2;
@@ -209,20 +231,20 @@ pub fn fat_fat16_parser<'a>(
             }
             fat_clusters.push(chain);
         }
-        debug!("\nNumber of clusters parsed: {}\n", cnt);
-
-        let (i, _) = take(max_truncated - (cnt + 4))(index)?;
 
         // Build the cluster index
         let fat_cluster_index = HashMap::new();
 
+        let (_, raw_data) = take(max)(start_index)?;
+
         Ok((
-            i,
+            index,
             FATFAT16 {
                 fat_id,
                 eoc_marker,
                 fat_clusters,
                 fat_cluster_index,
+                raw_data,
             },
         ))
     }
@@ -256,7 +278,8 @@ pub struct FATFAT12<'a> {
     /// The raw cluster data
     /// Figure out how to name the IntoIterators and other support for this
     /// The fat_cluster_index isn't needed with this
-    /// cluster
+    /// The raw_data includes all the File Allocation Table data, including the
+    /// FAT ID and EOC marker
     pub raw_data: &'a [u8],
 }
 
@@ -302,7 +325,7 @@ impl<'a> IntoIterator for FATFAT12<'a> {
     fn into_iter(self) -> Self::IntoIter {
         Into12BitWordIter {
             data: self.raw_data,
-            index: 0,
+            index: 3,
             temp: None,
         }
     }
@@ -316,13 +339,13 @@ impl<'a> FATFAT12<'a> {
             // This is the easy case, just go to the index, no intermediate value
             Into12BitWordIter {
                 data: self.raw_data,
-                index: (cluster / 2) * 3,
+                index: ((cluster / 2) * 3) + 3,
                 temp: None,
             }
         } else {
             // Build the intermediate value and point to the index
             let data = self.raw_data;
-            let mut index = ((cluster - 1) / 2) * 3;
+            let mut index = (((cluster - 1) / 2) * 3) + 3;
             if index < (data.len() - 2) {
                 let data = &data[index..index + 3];
                 index += 3;
@@ -389,7 +412,7 @@ pub struct FAT12ClusterChain<'a> {
 }
 
 /// The iterator state structure for iterating from 12-bit words to FAT12ClusterEntry values
-pub struct IntoClusterChainIter<'a> {
+pub struct IntoFAT12ClusterChainIter<'a> {
     pub data: &'a [u16],
     pub index: usize,
     pub eoc_marker: u16,
@@ -397,11 +420,11 @@ pub struct IntoClusterChainIter<'a> {
 
 impl<'a> IntoIterator for FAT12ClusterChain<'a> {
     type Item = FAT12ClusterEntry;
-    type IntoIter = IntoClusterChainIter<'a>;
+    type IntoIter = IntoFAT12ClusterChainIter<'a>;
 
     /// Build an iterator for this cluster chain
-    fn into_iter(self) -> IntoClusterChainIter<'a> {
-        IntoClusterChainIter {
+    fn into_iter(self) -> IntoFAT12ClusterChainIter<'a> {
+        IntoFAT12ClusterChainIter {
             data: self.raw_data,
             index: 0,
             eoc_marker: 0xFFF,
@@ -412,8 +435,8 @@ impl<'a> IntoIterator for FAT12ClusterChain<'a> {
 impl<'a> FAT12ClusterChain<'a> {
     /// Build an iterator for this cluster chain
     /// The iteration starts at cluster number cluster
-    pub fn into_iter_from_cluster(self, cluster: usize) -> IntoClusterChainIter<'a> {
-        IntoClusterChainIter {
+    pub fn into_iter_from_cluster(self, cluster: usize) -> IntoFAT12ClusterChainIter<'a> {
+        IntoFAT12ClusterChainIter {
             data: self.raw_data,
             index: cluster,
             eoc_marker: 0xFFF,
@@ -422,11 +445,15 @@ impl<'a> FAT12ClusterChain<'a> {
 }
 
 /// Second-level iterator, from 12-byte words to FAT12ClusterEntries
-impl Iterator for IntoClusterChainIter<'_> {
+impl Iterator for IntoFAT12ClusterChainIter<'_> {
     type Item = FAT12ClusterEntry;
 
     fn next(&mut self) -> Option<Self::Item> {
-        if (self.data[self.index] != self.eoc_marker) && (self.index < self.data.len()) {
+        if (self.index < self.data.len())
+            && (self.data[self.index] != self.eoc_marker)
+            // FreeCluster is also considered EOC marker in cluster chains
+            && (self.data[self.index] != 0x00)
+        {
             let item = self.data[self.index];
             self.index += 1;
             Some(parse_fat12_value(item))
@@ -443,6 +470,7 @@ pub fn fat_fat12_parser<'a>(
     fat_boot_sector: &'a FATBootSector,
 ) -> impl Fn(&[u8]) -> IResult<&[u8], FATFAT12> + 'a {
     move |i| {
+        let start_index = i;
         let (i, res) = little_endian_12_bit_parser(i)?;
         let fat_id = res[0];
         let eoc_marker = res[1];
@@ -458,7 +486,6 @@ pub fn fat_fat12_parser<'a>(
         debug!("EOC Marker: {:02X}", eoc_marker);
 
         let mut cnt = 0;
-        let start_index = i;
         let mut index = i;
         let mut fat_entries_new: [u16; 2];
 
@@ -541,6 +568,127 @@ pub fn fat_fat12_parser<'a>(
     }
 }
 
+/// Structure to hold iterator state for iterating from bytes to 16-bit words
+pub struct Into16BitWordIter<'a> {
+    //pub struct IntoIter<'a> {
+    pub data: &'a [u8],
+    pub index: usize,
+}
+
+/// IntoIterator implementation to create an iterator from bytes to 16-bit words
+impl<'a> IntoIterator for FATFAT16<'a> {
+    type Item = u16;
+    type IntoIter = Into16BitWordIter<'a>;
+
+    /// Build an iterator for this cluster chain
+    fn into_iter(self) -> Self::IntoIter {
+        Into16BitWordIter {
+            data: self.raw_data,
+            index: 6,
+        }
+    }
+}
+
+impl<'a> FATFAT16<'a> {
+    /// Build an iterator for this cluster chain
+    /// The iteration starts at cluster number cluster
+    pub fn into_iter_from_cluster(self, cluster: usize) -> Into16BitWordIter<'a> {
+        // This is the easy case, just go to the index, no intermediate value
+        Into16BitWordIter {
+            data: self.raw_data,
+            index: (cluster * 2) + 6,
+        }
+    }
+}
+
+/// First-level iterator, go from a little-endian 8-bit slice to individual 12-bit words
+impl Iterator for Into16BitWordIter<'_> {
+    type Item = u16;
+
+    fn next(&mut self) -> Option<Self::Item> {
+        if self.index < self.data.len() {
+            let data = &self.data[self.index..self.index + 2];
+            self.index += 2;
+            let result = little_endian_16_bit_parser(data);
+            match result {
+                Ok(res) => Some(res.1),
+                Err(e) => {
+                    error!("Couldn't parse FAT16 word: {}", e);
+                    panic!("Couldn't parse FAT16 word: {}", e);
+                }
+            }
+        } else {
+            None
+        }
+    }
+}
+
+/// The data structure to iterate through cluster entries
+// TODO: Rename some of these iterator structures, can be integrated elsewhere
+pub struct FAT16ClusterChain<'a> {
+    pub eoc_marker: u16,
+    /// The raw cluster data
+    /// TODO: Decide on the preferred interface
+    /// TODO: Another approach may be to use nom and keep track of the
+    /// "i" value as the pointer
+    pub raw_data: &'a [u16],
+}
+
+/// The iterator state structure for iterating from 12-bit words to FAT12ClusterEntry values
+pub struct IntoFAT16ClusterChainIter<'a> {
+    pub data: &'a [u16],
+    pub index: usize,
+    pub eoc_marker: u16,
+}
+
+impl<'a> IntoIterator for FAT16ClusterChain<'a> {
+    type Item = FAT16ClusterEntry;
+    type IntoIter = IntoFAT16ClusterChainIter<'a>;
+
+    /// Build an iterator for this cluster chain
+    fn into_iter(self) -> IntoFAT16ClusterChainIter<'a> {
+        IntoFAT16ClusterChainIter {
+            data: self.raw_data,
+            index: 0,
+            eoc_marker: 0xFFFF,
+        }
+    }
+}
+
+impl<'a> FAT16ClusterChain<'a> {
+    /// Build an iterator for this cluster chain
+    /// The iteration starts at cluster number cluster
+    pub fn into_iter_from_cluster(self, cluster: usize) -> IntoFAT16ClusterChainIter<'a> {
+        IntoFAT16ClusterChainIter {
+            data: self.raw_data,
+            index: cluster,
+            eoc_marker: 0xFFFF,
+        }
+    }
+}
+
+/// Second-level iterator, from 12-byte words to FAT12ClusterEntries
+/// It's redundant shit, it really is, but it works
+/// trait bounds, trait objects, all kinds of beautiful language features
+/// but here we are
+impl Iterator for IntoFAT16ClusterChainIter<'_> {
+    type Item = FAT16ClusterEntry;
+
+    fn next(&mut self) -> Option<Self::Item> {
+        if (self.index < self.data.len())
+            && (self.data[self.index] != self.eoc_marker)
+            // FreeCluster is also considered EOC marker in cluster chains
+            && (self.data[self.index] != 0x0000)
+        {
+            let item = self.data[self.index];
+            self.index += 1;
+            Some(parse_fat16_value(item))
+        } else {
+            None
+        }
+    }
+}
+
 /// The actual File Allocation Table in the FAT filesystem
 /// This project only supports older filesystems
 #[derive(Debug, PartialEq)]
@@ -548,7 +696,17 @@ pub enum FAT<'a> {
     /// FAT12 File Allocation Table
     FAT12(FATFAT12<'a>),
     /// FAT16 File Allocation Table
-    FAT16(FATFAT16),
+    FAT16(FATFAT16<'a>),
+}
+
+/// Display a File Allocation Table
+impl Display for FAT<'_> {
+    fn fmt(&self, f: &mut Formatter<'_>) -> Result {
+        match self {
+            FAT::FAT12(fat) => write!(f, "{}", fat),
+            FAT::FAT16(fat) => write!(f, "{}", fat),
+        }
+    }
 }
 
 /// Parse three bytes into two 12-bit values, little-endian format
@@ -566,13 +724,28 @@ pub fn little_endian_12_bit_parser(i: &[u8]) -> IResult<&[u8], [u16; 2]> {
     Ok((i, result))
 }
 
+/// Parse two bytes into one 16-bit word, little-endian format
+/// So 0x01 0x00 -> 0x0001
+pub fn little_endian_16_bit_parser(i: &[u8]) -> IResult<&[u8], u16> {
+    let result = le_u16(i)?;
+
+    Ok(result)
+}
+
 mod tests {
     // For some reason this allow(unused_imports) is required in tests or inner modules
     // with the Rust 1.59.0 release
     #[allow(unused_imports)]
-    use crate::cluster::FATFAT12;
+    use crate::cluster::{
+        FAT12ClusterChain, FAT12ClusterEntry, FAT16ClusterChain, FAT16ClusterEntry,
+    };
     #[allow(unused_imports)]
-    use crate::cluster::{FAT12ClusterChain, FAT12ClusterEntry};
+    use crate::cluster::{FATFAT12, FATFAT16};
+    #[allow(unused_imports)]
+    use crate::fat::{
+        BIOSParameterBlock, DOS3FATBootSector, FATBootSector, FATBootSectorSignature,
+        FATBootSectorStart,
+    };
     #[allow(unused_imports)]
     use std::collections::HashMap;
 
@@ -593,12 +766,28 @@ mod tests {
         }
     }
 
+    /// Test parsing 16-bit values
+    #[test]
+    fn little_endian_16_bit_parser_works() {
+        // [0x12, 0x34, 0x56] should parse as [0x0412, 0x0563]
+        let data: [u8; 2] = [0x12, 0x34];
+
+        let little_endian_16_bit_parser_result = super::little_endian_16_bit_parser(&data);
+
+        match little_endian_16_bit_parser_result {
+            Ok((_, result)) => {
+                assert_eq!(result, 0x3412);
+            }
+            Err(_) => panic!("Parser failed"),
+        }
+    }
+
     /// Test first-level iterating through a cluster
     #[test]
     fn first_level_cluster_iterator_works() {
         // [0x02, 0x30, 0x00, 0x04, 0x50, 0x00] should parse as
         // [0x002, 0x003, 0x004, 0x005]
-        let data: [u8; 6] = [0x02, 0x30, 0x00, 0x04, 0x50, 0x00];
+        let data: [u8; 9] = [0xF8, 0xFF, 0xFF, 0x02, 0x30, 0x00, 0x04, 0x50, 0x00];
 
         let cluster_chain = FATFAT12 {
             fat_id: 0x00,
@@ -620,7 +809,9 @@ mod tests {
     fn first_level_cluster_into_iter_from_cluster_zero_works() {
         // [0x02, 0x30, 0x00, 0x04, 0x50, 0x00, 0x06, 0x70, 0x00] should parse as
         // [0x002, 0x003, 0x004, 0x005, 0x006, 0x007]
-        let data: [u8; 9] = [0x02, 0x30, 0x00, 0x04, 0x50, 0x00, 0x06, 0x70, 0x00];
+        let data: [u8; 12] = [
+            0xF8, 0xFF, 0xFF, 0x02, 0x30, 0x00, 0x04, 0x50, 0x00, 0x06, 0x70, 0x00,
+        ];
 
         let cluster_chain = FATFAT12 {
             fat_id: 0x00,
@@ -645,7 +836,9 @@ mod tests {
     fn first_level_cluster_into_iter_from_cluster_one_works() {
         // [0x02, 0x30, 0x00, 0x04, 0x50, 0x00, 0x06, 0x70, 0x00] should parse as
         // [0x002, 0x003, 0x004, 0x005, 0x006, 0x007]
-        let data: [u8; 9] = [0x02, 0x30, 0x00, 0x04, 0x50, 0x00, 0x06, 0x70, 0x00];
+        let data: [u8; 12] = [
+            0xF8, 0xFF, 0xFF, 0x02, 0x30, 0x00, 0x04, 0x50, 0x00, 0x06, 0x70, 0x00,
+        ];
 
         let cluster_chain = FATFAT12 {
             fat_id: 0x00,
@@ -669,7 +862,9 @@ mod tests {
     fn first_level_cluster_into_iter_from_cluster_last_item() {
         // [0x02, 0x30, 0x00, 0x04, 0x50, 0x00, 0x06, 0x70, 0x00] should parse as
         // [0x002, 0x003, 0x004, 0x005, 0x006, 0x007]
-        let data: [u8; 9] = [0x02, 0x30, 0x00, 0x04, 0x50, 0x00, 0x06, 0x70, 0x00];
+        let data: [u8; 12] = [
+            0xF8, 0xFF, 0xFF, 0x02, 0x30, 0x00, 0x04, 0x50, 0x00, 0x06, 0x70, 0x00,
+        ];
 
         let cluster_chain = FATFAT12 {
             fat_id: 0x00,
@@ -688,7 +883,9 @@ mod tests {
     fn first_level_cluster_into_iter_from_cluster_out_of_range_even_works() {
         // [0x02, 0x30, 0x00, 0x04, 0x50, 0x00, 0x06, 0x70, 0x00] should parse as
         // [0x002, 0x003, 0x004, 0x005, 0x006, 0x007]
-        let data: [u8; 9] = [0x02, 0x30, 0x00, 0x04, 0x50, 0x00, 0x06, 0x70, 0x00];
+        let data: [u8; 12] = [
+            0xF8, 0xFF, 0xFF, 0x02, 0x30, 0x00, 0x04, 0x50, 0x00, 0x06, 0x70, 0x00,
+        ];
 
         let cluster_chain = FATFAT12 {
             fat_id: 0x00,
@@ -707,7 +904,9 @@ mod tests {
     fn first_level_cluster_into_iter_from_cluster_out_of_range_odd_works() {
         // [0x02, 0x30, 0x00, 0x04, 0x50, 0x00, 0x06, 0x70, 0x00] should parse as
         // [0x002, 0x003, 0x004, 0x005, 0x006, 0x007]
-        let data: [u8; 9] = [0x02, 0x30, 0x00, 0x04, 0x50, 0x00, 0x06, 0x70, 0x00];
+        let data: [u8; 12] = [
+            0xF8, 0xFF, 0xFF, 0x02, 0x30, 0x00, 0x04, 0x50, 0x00, 0x06, 0x70, 0x00,
+        ];
 
         let cluster_chain = FATFAT12 {
             fat_id: 0x00,
@@ -726,7 +925,9 @@ mod tests {
     fn second_level_cluster_iterator_works() {
         // [0x02, 0x30, 0x00, 0x04, 0x50, 0x00] should parse as
         // [0x002, 0x003, 0x004, 0x005]
-        let data: [u8; 9] = [0x02, 0x30, 0x00, 0x04, 0x50, 0x00, 0xFF, 0x0F, 0x00];
+        let data: [u8; 12] = [
+            0xF8, 0xFF, 0xFF, 0x02, 0x30, 0x00, 0x04, 0x50, 0x00, 0xFF, 0x0F, 0x00,
+        ];
 
         let cluster_chain = FATFAT12 {
             fat_id: 0x00,
@@ -750,5 +951,182 @@ mod tests {
         assert_eq!(result2[1], FAT12ClusterEntry::DataCluster(0x003));
         assert_eq!(result2[2], FAT12ClusterEntry::DataCluster(0x004));
         assert_eq!(result2[3], FAT12ClusterEntry::DataCluster(0x005));
+    }
+
+    /// Test parsing 16-bit values
+    #[test]
+    fn fat_fat16_parser_works() {
+        let oem_name = [0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00];
+        let data: [u8; 16] = [
+            0xF8, 0xFF, 0xFF, 0xFF, 0x00, 0x00, 0x04, 0x00, 0x05, 0x00, 0x06, 0x00, 0x07, 0x00,
+            0x08, 0x00,
+        ];
+
+        let mut new_data: [u8; 32768] = [0; 32768];
+
+        for i in 0..15 {
+            new_data[i] = data[i];
+        }
+
+        let fat_boot_sector = FATBootSector {
+            fat_boot_sector_start: FATBootSectorStart::DOS3(DOS3FATBootSector {
+                jump_instruction: 0x00,
+                jump_location: 0x00,
+                nop_instruction: 0x00,
+                oem_name: &oem_name,
+            }),
+            bios_parameter_block: BIOSParameterBlock {
+                bytes_per_logical_sector: 512,
+                logical_sectors_per_cluster: 4,
+                count_of_reserved_logical_sectors: 4,
+                number_of_fats: 2,
+                maximum_number_of_root_directory_entries: 512,
+                total_logical_sectors: 32000,
+                media_descriptor: 0xF8,
+                logical_sectors_per_fat: 32,
+            },
+            boot_code: None,
+            signature: FATBootSectorSignature::IBMPC([0x55, 0xAA]),
+        };
+
+        let fat_fat16_parser_result = super::fat_fat16_parser(&fat_boot_sector)(&new_data);
+
+        match fat_fat16_parser_result {
+            Ok((_, result)) => {
+                assert_eq!(result.fat_clusters[0].len(), 8189);
+                assert_eq!(result.fat_clusters[0][0], 0x00);
+                assert_eq!(result.fat_clusters[0][1], 0x04);
+                assert_eq!(result.fat_clusters[0][2], 0x05);
+                assert_eq!(result.fat_clusters[0][3], 0x06);
+                assert_eq!(result.fat_clusters[0][4], 0x07);
+                assert_eq!(result.fat_clusters[0][5], 0x08);
+            }
+            Err(_) => panic!("Parser failed"),
+        }
+    }
+
+    /// Test first-level iterating through a 16-bit cluster
+    #[test]
+    fn first_level_16_bit_cluster_iterator_works() {
+        // [0x01, 0x00, 0x02, 0x00, 0x03, 0x00] should parse as
+        // [0x001, 0x002, 0x003]
+        let data: [u8; 12] = [
+            0xF8, 0xFF, 0xFF, 0xFF, 0x00, 0x00, 0x02, 0x00, 0x03, 0x00, 0x04, 0x00,
+        ];
+
+        let cluster_chain = FATFAT16 {
+            fat_id: 0x00,
+            eoc_marker: 0xFFFF,
+            fat_clusters: Vec::new(),
+            fat_cluster_index: HashMap::new(),
+            raw_data: &data,
+        };
+
+        let result: Vec<u16> = cluster_chain.into_iter().collect();
+        assert_eq!(result.len(), 3);
+        assert_eq!(result[0], 0x002);
+        assert_eq!(result[1], 0x003);
+        assert_eq!(result[2], 0x004);
+    }
+
+    /// Test first-level iterating through a 16-bit cluster, starting at cluster zero
+    #[test]
+    fn first_level_16_bit_cluster_iterator_from_cluster_zero_works() {
+        // [0x01, 0x00, 0x02, 0x00, 0x03, 0x00] should parse as
+        // [0x001, 0x002, 0x003]
+        let data: [u8; 12] = [
+            0xF8, 0xFF, 0xFF, 0xFF, 0x00, 0x00, 0x02, 0x00, 0x03, 0x00, 0x04, 0x00,
+        ];
+
+        let cluster_chain = FATFAT16 {
+            fat_id: 0x00,
+            eoc_marker: 0xFFFF,
+            fat_clusters: Vec::new(),
+            fat_cluster_index: HashMap::new(),
+            raw_data: &data,
+        };
+
+        let result: Vec<u16> = cluster_chain.into_iter_from_cluster(0).collect();
+        assert_eq!(result.len(), 3);
+        assert_eq!(result[0], 0x002);
+        assert_eq!(result[1], 0x003);
+        assert_eq!(result[2], 0x004);
+    }
+
+    /// Test first-level iterating through a 16-bit cluster, starting at cluster one
+    #[test]
+    fn first_level_16_bit_cluster_iterator_from_cluster_one_works() {
+        // [0x01, 0x00, 0x02, 0x00, 0x03, 0x00] should parse as
+        // [0x001, 0x002, 0x003]
+        let data: [u8; 12] = [
+            0xF8, 0xFF, 0xFF, 0xFF, 0x00, 0x00, 0x02, 0x00, 0x03, 0x00, 0x04, 0x00,
+        ];
+
+        let cluster_chain = FATFAT16 {
+            fat_id: 0x00,
+            eoc_marker: 0xFFFF,
+            fat_clusters: Vec::new(),
+            fat_cluster_index: HashMap::new(),
+            raw_data: &data,
+        };
+
+        let result: Vec<u16> = cluster_chain.into_iter_from_cluster(1).collect();
+        assert_eq!(result.len(), 2);
+        assert_eq!(result[0], 0x003);
+        assert_eq!(result[1], 0x004);
+    }
+
+    /// Test first-level iterating through a 16-bit cluster, starting at last item
+    #[test]
+    fn first_level_16_bit_cluster_iterator_from_cluster_last_item_works() {
+        // [0x01, 0x00, 0x02, 0x00, 0x03, 0x00] should parse as
+        // [0x001, 0x002, 0x003]
+        let data: [u8; 12] = [
+            0xF8, 0xFF, 0xFF, 0xFF, 0x00, 0x00, 0x02, 0x00, 0x03, 0x00, 0x04, 0x00,
+        ];
+
+        let cluster_chain = FATFAT16 {
+            fat_id: 0x00,
+            eoc_marker: 0xFFFF,
+            fat_clusters: Vec::new(),
+            fat_cluster_index: HashMap::new(),
+            raw_data: &data,
+        };
+
+        let result: Vec<u16> = cluster_chain.into_iter_from_cluster(2).collect();
+        assert_eq!(result.len(), 1);
+        assert_eq!(result[0], 0x004);
+    }
+
+    /// Test iterating through 16-bit words as a cluster chain
+    #[test]
+    fn second_level_16_bit_cluster_iterator_works() {
+        // [0x02, 0x30, 0x00, 0x04, 0x50, 0x00] should parse as
+        // [0x002, 0x003, 0x004, 0x005]
+        let data: [u8; 12] = [
+            0xF8, 0xFF, 0xFF, 0xFF, 0x00, 0x00, 0x02, 0x00, 0x03, 0x00, 0x04, 0x00,
+        ];
+
+        let cluster_chain = FATFAT16 {
+            fat_id: 0x00,
+            eoc_marker: 0xFFFF,
+            fat_clusters: Vec::new(),
+            fat_cluster_index: HashMap::new(),
+            raw_data: &data,
+        };
+
+        let result: Vec<u16> = cluster_chain.into_iter().collect();
+
+        let cluster_chain = FAT16ClusterChain {
+            eoc_marker: 0xFFFF,
+            raw_data: &result,
+        };
+
+        let result2: Vec<FAT16ClusterEntry> = cluster_chain.into_iter().collect();
+
+        assert_eq!(result2.len(), 3);
+        assert_eq!(result2[0], FAT16ClusterEntry::DataCluster(0x0002));
+        assert_eq!(result2[1], FAT16ClusterEntry::DataCluster(0x0003));
+        assert_eq!(result2[2], FAT16ClusterEntry::DataCluster(0x0004));
     }
 }

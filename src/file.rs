@@ -13,7 +13,8 @@ pub fn get_file_data(disk: FATDisk, filename: &String) -> Vec<u8> {
 
     let fat = match disk.fat {
         FAT::FAT12(f) => f,
-        _ => {
+        FAT::FAT16(_f) => {
+            // This is going to require refactors
             error!("FAT16 not fully implemented yet");
             panic!("FAT16 not fully implemented yet");
         }
@@ -22,11 +23,11 @@ pub fn get_file_data(disk: FATDisk, filename: &String) -> Vec<u8> {
     let sector_size = disk
         .fat_boot_sector
         .bios_parameter_block
-        .bytes_per_logical_sector
+        .bytes_per_logical_sector as u32
         * disk
             .fat_boot_sector
             .bios_parameter_block
-            .logical_sectors_per_cluster as u16;
+            .logical_sectors_per_cluster as u32;
 
     // This adjustment by two seems weird, but the cluster entry values are correct
     // Unless the root directory table or FAT is considered part of the data region
