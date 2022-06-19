@@ -9,7 +9,7 @@
 /// Byte zero is a jump:
 /// either a short jump followed by a NOP: 0xEB 0x?? 0x90
 /// or a near jump 0xE9 0x?? 0x??
-use log::{debug, error};
+use log::{debug, error, warn};
 use nom::bytes::complete::take;
 use nom::combinator::verify;
 use nom::error::ErrorKind;
@@ -19,7 +19,7 @@ use nom::{Err, IResult};
 
 use std::fmt::{Display, Formatter, Result};
 
-use crate::cluster::{fat_fat12_parser, fat_fat16_parser, FAT};
+use crate::cluster::{fat_fat12_parser, fat_fat16_parser, FATType, FAT};
 use crate::directory_table::{fat_directory_parser, FATDirectory};
 use crate::sanity_check::SanityCheck;
 
@@ -39,6 +39,9 @@ pub struct FATDisk<'a> {
 
     /// The data region of the FAT disk
     pub data_region: &'a [u8],
+
+    /// The data region of the FAT disk as clusters
+    pub data_region_as_clusters: Vec<&'a [u8]>,
 }
 
 impl SanityCheck for FATDisk<'_> {
@@ -64,6 +67,9 @@ impl Display for FATDisk<'_> {
         match &self.fat {
             FAT::FAT12(fat) => write!(f, "{}", fat)?,
             FAT::FAT16(fat) => write!(f, "{}", fat)?,
+            FAT::Unknown => {
+                panic!("Unknown FAT type");
+            }
         }
         write!(f, "root_directory_table: {}", self.directory_table)
     }
@@ -294,6 +300,7 @@ pub enum MediaDescriptor {
 
 /// The BIOS Parameter Block occurs after the first four bytes of the Boot Sector
 /// This structure is 13 bytes
+#[derive(Clone, Copy, Debug, PartialEq)]
 pub struct BIOSParameterBlock {
     /// Number of bytes per logical sector, usually 512
     pub bytes_per_logical_sector: u16,
@@ -609,6 +616,72 @@ pub fn calculate_boot_sector_sum_from_words(sector_data: &[u8]) -> bool {
     sum == 0x1234
 }
 
+/// Read in the data regions as a vector of clusters
+/// This DOES NOT read it in as sectors, but clusters.
+/// Use the BPB to calculate the proper block sizes it returns
+pub fn parse_data_region_as_clusters(
+    bpb: &BIOSParameterBlock,
+) -> impl Fn(&[u8]) -> IResult<&[u8], Vec<&[u8]>> + '_ {
+    move |i| {
+        let cluster_size_in_bytes =
+            (bpb.logical_sectors_per_cluster as u16 * bpb.bytes_per_logical_sector) as u64;
+
+        let num_clusters = i.len() / cluster_size_in_bytes as usize;
+
+        if (num_clusters * 2) != bpb.total_logical_sectors.try_into().unwrap() {
+            warn!(
+                "Invalid number of sectors calculated: expected: {}, calculated: {}",
+                bpb.total_logical_sectors,
+                num_clusters * 2
+            );
+        }
+        let (i, res) = count(take(cluster_size_in_bytes), num_clusters)(i)?;
+        Ok((i, res))
+    }
+}
+
+/// This is done using the technique in FAT Type Determination
+/// from the Microsoft Extensible Firmware Initiative
+/// FAT32 File System Specification.
+pub fn fat_type(bpb: &BIOSParameterBlock) -> FATType {
+    let root_dir_sectors = ((bpb.maximum_number_of_root_directory_entries * 32)
+        + (bpb.bytes_per_logical_sector - 1))
+        / bpb.bytes_per_logical_sector;
+
+    let fat_size = if bpb.logical_sectors_per_fat != 0 {
+        bpb.logical_sectors_per_fat
+    } else {
+        // FAT32 or other file-system type
+        error!("Unsupported filesystem type, old logical sectors per FAT is zero");
+        panic!("Unsupported filesystem type, old logical sectors per FAT is zero");
+    };
+
+    let total_sectors = if bpb.total_logical_sectors != 0 {
+        bpb.total_logical_sectors
+    } else {
+        // FAT32 or other file-system type
+        error!("Unsupported filesystem type, old total logical sectors is zero");
+        panic!("Unsupported filesystem type, old total logical sectors is zero");
+    };
+
+    let data_sectors: u32 = total_sectors as u32
+        - (bpb.count_of_reserved_logical_sectors as u32
+            + (bpb.number_of_fats as u32 * fat_size as u32) as u32
+            + root_dir_sectors as u32) as u32;
+
+    let count_of_clusters: u32 = data_sectors / bpb.logical_sectors_per_cluster as u32;
+
+    if count_of_clusters < 4085 {
+        FATType::FAT12
+    } else if count_of_clusters < 65525 {
+        FATType::FAT16
+    } else {
+        // FAT32 or other file-system type
+        error!("Unsupported filesystem type, count of clusters is too high");
+        panic!("Unsupported filesystem type, count of clusters is too high");
+    }
+}
+
 /// Parse a DOS FAT image
 pub fn fat_disk_parser<'a>(
     filesystem_type: &'a Option<String>,
@@ -641,38 +714,50 @@ pub fn fat_disk_parser<'a>(
         // Skip to the FAT
         let (i, _) = take(offset)(i)?;
 
-        // TODO: FAT12 or FAT16 should be dynamically determined
-        let number_bits = filesystem_bits.unwrap_or(12);
-
-        let (i, fat1) = if number_bits == 12 {
-            let (i, res) = fat_fat12_parser(&fat_boot_sector)(i)?;
-            (i, FAT::FAT12(res))
-        } else if number_bits == 16 {
-            let (i, res) = fat_fat16_parser(&fat_boot_sector)(i)?;
-            (i, FAT::FAT16(res))
+        // At this point we can check what kind of filesystem
+        // this is: FAT12, FAT16 or FAT32.
+        // FAT type determination now done based on recommendations
+        let fat_type = if let Some(bits) = filesystem_bits {
+            match bits {
+                12 => FATType::FAT12,
+                16 => FATType::FAT16,
+                _ => {
+                    error!("Invalid FAT Type requested");
+                    panic!("Invalid FAT Type requested");
+                }
+            }
         } else {
-            let (i, res) = fat_fat12_parser(&fat_boot_sector)(i)?;
-            (i, FAT::FAT12(res))
+            fat_type(&fat_boot_sector.bios_parameter_block)
+        };
+
+        debug!("Determined FAT Type: {}", fat_type);
+
+        let (i, fat1) = match fat_type {
+            FATType::FAT12 => {
+                let (i, res) = fat_fat12_parser(&fat_boot_sector)(i)?;
+                (i, FAT::FAT12(res))
+            }
+            FATType::FAT16 => {
+                let (i, res) = fat_fat16_parser(&fat_boot_sector)(i)?;
+                (i, FAT::FAT16(res))
+            }
         };
 
         // parse the backup FAT
         let (i, fat2) = if fat_boot_sector.bios_parameter_block.number_of_fats == 2 {
-            if number_bits == 12 {
-                let (i, res) = fat_fat12_parser(&fat_boot_sector)(i)?;
-                (i, Some(FAT::FAT12(res)))
-            } else if number_bits == 16 {
-                let (i, res) = fat_fat16_parser(&fat_boot_sector)(i)?;
-                (i, Some(FAT::FAT16(res)))
-            } else {
-                let (i, res) = fat_fat12_parser(&fat_boot_sector)(i)?;
-                (i, Some(FAT::FAT12(res)))
+            match fat_type {
+                FATType::FAT12 => {
+                    let (i, res) = fat_fat12_parser(&fat_boot_sector)(i)?;
+                    (i, Some(FAT::FAT12(res)))
+                }
+                FATType::FAT16 => {
+                    let (i, res) = fat_fat16_parser(&fat_boot_sector)(i)?;
+                    (i, Some(FAT::FAT16(res)))
+                }
             }
         } else {
             (i, None)
         };
-
-        // Dump the FAT
-        // debug!("FAT: {}", fat1);
 
         // skip over bad sectors or find a different way
         let (i, directory_table) = if let Some(location) = root_dir_loc {
@@ -698,7 +783,16 @@ pub fn fat_disk_parser<'a>(
 
         // We're in the data region
         // Read in the rest of the data
-        let (i, data_region) = take(i.len())(i)?;
+        // The data region aligns with cluster 2:
+        // From the fatgen103 document:
+        // "The start of the data region, the first sector of cluster 2"
+        let (i2, data_region) = take(i.len())(i)?;
+
+        // The data region is a series of clusters.  Files can span
+        // multiple non-contiguous clusters, but clusters are not
+        // usually shared among files.
+        let (_i, data_region_as_clusters) =
+            parse_data_region_as_clusters(&fat_boot_sector.bios_parameter_block)(i)?;
 
         let fat_disk = FATDisk {
             fat_boot_sector,
@@ -706,6 +800,7 @@ pub fn fat_disk_parser<'a>(
             backup_fat: fat2,
             directory_table,
             data_region,
+            data_region_as_clusters,
         };
 
         // Run a sanity check on the FAT Disk
@@ -713,7 +808,7 @@ pub fn fat_disk_parser<'a>(
         // TODO: Verify the code, they appear different
         fat_disk.check();
 
-        Ok((i, fat_disk))
+        Ok((i2, fat_disk))
     }
 }
 

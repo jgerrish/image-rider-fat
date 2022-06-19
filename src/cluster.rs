@@ -130,6 +130,21 @@ pub enum FAT16ClusterEntry {
     EndOfChainMarker(u16),
 }
 
+/// Print FAT12 cluster entries as 12-bit hex values
+impl UpperHex for FAT16ClusterEntry {
+    fn fmt(&self, f: &mut Formatter) -> Result {
+        match self {
+            FAT16ClusterEntry::FreeCluster => write!(f, "000"),
+            FAT16ClusterEntry::Reserved1 => write!(f, "001"),
+            FAT16ClusterEntry::DataCluster(value) => write!(f, "{:03X}", value),
+            FAT16ClusterEntry::Reserved2(value) => write!(f, "{:03X}", value),
+            FAT16ClusterEntry::Reserved3 => write!(f, "FF6"),
+            FAT16ClusterEntry::BadCluster => write!(f, "FF7"),
+            FAT16ClusterEntry::EndOfChainMarker(value) => write!(f, "{:03X}", value),
+        }
+    }
+}
+
 /// Parse a FAT16 value as a FAT16ClusterEntry
 pub fn parse_fat16_value(value: u16) -> FAT16ClusterEntry {
     match value {
@@ -157,7 +172,7 @@ pub struct FATFAT16<'a> {
     /// The FAT entries / clusters
     /// These are in disk order, not chain order.  To use these cluster chains
     /// You need to walk the chain, finding the next cluster with the current value
-    pub fat_clusters: Vec<Vec<u16>>,
+    pub fat_clusters: Vec<Vec<FAT16ClusterEntry>>,
 
     /// An index into the FAT chains
     /// The index key is the start of the chain, the value is a reference to the chain
@@ -190,6 +205,15 @@ impl<'a> Display for FATFAT16<'a> {
     }
 }
 
+/// Returns true if this cluster chain entry is considered an
+/// end-of-chain.
+pub fn fat16_cluster_entry_eoc(fat_cluster_entry: FAT16ClusterEntry) -> bool {
+    matches!(
+        fat_cluster_entry,
+        FAT16ClusterEntry::EndOfChainMarker(_) | FAT16ClusterEntry::FreeCluster
+    )
+}
+
 /// Parse a FAT16 File Allocation Table
 pub fn fat_fat16_parser<'a>(
     fat_boot_sector: &'a FATBootSector,
@@ -206,7 +230,7 @@ pub fn fat_fat16_parser<'a>(
         let mut fat_clusters = Vec::new();
 
         let mut index = i;
-        let mut fat_entry: u16;
+        let mut fat_entry: FAT16ClusterEntry;
         let max = fat_boot_sector
             .bios_parameter_block
             .bytes_per_logical_sector as u32
@@ -217,19 +241,22 @@ pub fn fat_fat16_parser<'a>(
             let (index_new, fat_entry_new) = le_u16(index)?;
             cnt += 2;
             // There may be a better pattern for this
-            fat_entry = fat_entry_new;
+            fat_entry = parse_fat16_value(fat_entry_new);
+            // fat_entry = fat_entry_new;
             index = index_new;
 
             let mut chain = Vec::new();
             // read until the EOC marker is found
-            while (cnt < max) && (fat_entry != eoc_marker) {
+            while (cnt < max) && !fat16_cluster_entry_eoc(fat_entry) {
                 chain.push(fat_entry);
                 let result = le_u16(index)?;
                 cnt += 2;
                 index = result.0;
-                fat_entry = result.1;
+                fat_entry = parse_fat16_value(result.1);
             }
-            fat_clusters.push(chain);
+            if !chain.is_empty() {
+                fat_clusters.push(chain);
+            }
         }
 
         // Build the cluster index
@@ -300,12 +327,63 @@ impl<'a> Display for FATFAT12<'a> {
     }
 }
 
+/// Convert from FAT12ClusterEntry to 12-bit value
+pub fn fat12_cluster_entry_to_12_bit_value(cluster_entry: FAT12ClusterEntry) -> u16 {
+    match cluster_entry {
+        FAT12ClusterEntry::FreeCluster => 0x000,
+        FAT12ClusterEntry::Reserved1 => 0x001,
+        FAT12ClusterEntry::DataCluster(d) => d,
+        FAT12ClusterEntry::Reserved2(d) => d,
+        FAT12ClusterEntry::Reserved3 => 0xFF6,
+        FAT12ClusterEntry::BadCluster => 0xFF7,
+        FAT12ClusterEntry::EndOfChainMarker(d) => d,
+    }
+}
+
+/// Convert a vector of FAT12ClusterEntry values to Vec<u8> raw byte
+/// data.  This can be used to serialize the data to disk
+pub fn fat12_cluster_entries_to_u8_vec(cluster: std::vec::Vec<FAT12ClusterEntry>) -> Vec<u8> {
+    let mut data: Vec<u8> = Vec::new();
+
+    let mut iter = cluster.iter();
+
+    while let Some(x1) = iter.next() {
+        let word1 = fat12_cluster_entry_to_12_bit_value(*x1);
+        let word2 = match iter.next() {
+            // TODO: This can be done with a map
+            Some(x2) => fat12_cluster_entry_to_12_bit_value(*x2),
+            None => 0x000,
+        };
+        // We have one or two 12-bit words, we need to put them in
+        // three bytes.
+        // e.g.: (0x412, 0x563) -> (0x12, 0x34, 0x56)
+        let bytes: [u8; 3] = [
+            (word1 & 0xFF).try_into().unwrap(),
+            ((word1 >> 8) & ((word2 & 0x0F) << 4)).try_into().unwrap(),
+            (word2 >> 4).try_into().unwrap(),
+        ];
+        data.copy_from_slice(&bytes);
+    }
+
+    data
+}
+
 /// FATType defines the different FAT types
 pub enum FATType {
     /// FAT12, 12-bit FAT entries
     FAT12,
     /// FAT16, 16-bit FAT entries
     FAT16,
+}
+
+/// Display a File Allocation Table Type
+impl<'a> Display for FATType {
+    fn fmt(&self, f: &mut Formatter<'_>) -> Result {
+        match self {
+            FATType::FAT12 => write!(f, "FAT12"),
+            FATType::FAT16 => write!(f, "FAT16"),
+        }
+    }
 }
 
 /// Structure to hold iterator state for iterating from bytes to 12-bit words
@@ -463,6 +541,15 @@ impl Iterator for IntoFAT12ClusterChainIter<'_> {
     }
 }
 
+/// Returns true if this cluster chain entry is considered an
+/// end-of-chain.
+pub fn fat12_cluster_entry_eoc(fat_cluster_entry: FAT12ClusterEntry) -> bool {
+    matches!(
+        fat_cluster_entry,
+        FAT12ClusterEntry::EndOfChainMarker(_) | FAT12ClusterEntry::FreeCluster
+    )
+}
+
 /// Parse a FAT12 File Allocation Table
 /// TODO: This can be refactored using the new iterators
 ///       or a supplementary interface can be supplied
@@ -517,10 +604,9 @@ pub fn fat_fat12_parser<'a>(
             // Second iterator iterates from a starting chain entry to the end of that chain
             // Need the starting chain id / sector id for each chain somehow, either
             // storing the full &[u8] data, or augmenting the data with a start marker
-            // I want to work alone
             while (cnt < max_truncated)
-                && ((fat_entry_1 != FAT12ClusterEntry::EndOfChainMarker(eoc_marker))
-                    && (fat_entry_2 != FAT12ClusterEntry::EndOfChainMarker(eoc_marker)))
+                && !(fat12_cluster_entry_eoc(fat_entry_1))
+                && !(fat12_cluster_entry_eoc(fat_entry_2))
             {
                 chain.push(fat_entry_1);
                 chain.push(fat_entry_2);
@@ -534,7 +620,9 @@ pub fn fat_fat12_parser<'a>(
                 fat_entry_2 = parse_fat12_value(fat_entries_new[1]);
                 print!("{}{}", fat_entry_1, fat_entry_2);
             }
-            fat_clusters.push(chain);
+            if !chain.is_empty() {
+                fat_clusters.push(chain);
+            }
         }
         println!();
 
@@ -697,6 +785,8 @@ pub enum FAT<'a> {
     FAT12(FATFAT12<'a>),
     /// FAT16 File Allocation Table
     FAT16(FATFAT16<'a>),
+    /// Unknown FAT filesystem type
+    Unknown,
 }
 
 /// Display a File Allocation Table
@@ -705,6 +795,9 @@ impl Display for FAT<'_> {
         match self {
             FAT::FAT12(fat) => write!(f, "{}", fat),
             FAT::FAT16(fat) => write!(f, "{}", fat),
+            _ => {
+                panic!("Unknown FAT type");
+            }
         }
     }
 }
@@ -953,6 +1046,57 @@ mod tests {
         assert_eq!(result2[3], FAT12ClusterEntry::DataCluster(0x005));
     }
 
+    /// Test parsing 12-bit values
+    #[test]
+    fn fat_fat12_parser_works() {
+        let oem_name = [0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00];
+        let data: [u8; 6] = [0xF8, 0xFF, 0xFF, 0x03, 0x40, 0x00];
+
+        let mut new_data: [u8; 32768] = [0; 32768];
+
+        for i in 0..6 {
+            new_data[i] = data[i];
+        }
+
+        let fat_boot_sector = FATBootSector {
+            fat_boot_sector_start: FATBootSectorStart::DOS3(DOS3FATBootSector {
+                jump_instruction: 0x00,
+                jump_location: 0x00,
+                nop_instruction: 0x00,
+                oem_name: &oem_name,
+            }),
+            bios_parameter_block: BIOSParameterBlock {
+                bytes_per_logical_sector: 512,
+                logical_sectors_per_cluster: 4,
+                count_of_reserved_logical_sectors: 4,
+                number_of_fats: 2,
+                maximum_number_of_root_directory_entries: 512,
+                total_logical_sectors: 32000,
+                media_descriptor: 0xF8,
+                logical_sectors_per_fat: 32,
+            },
+            boot_code: None,
+            signature: FATBootSectorSignature::IBMPC([0x55, 0xAA]),
+        };
+
+        let fat_fat12_parser_result = super::fat_fat12_parser(&fat_boot_sector)(&new_data);
+
+        match fat_fat12_parser_result {
+            Ok((_, result)) => {
+                assert_eq!(result.fat_clusters[0].len(), 2);
+                assert_eq!(
+                    result.fat_clusters[0][0],
+                    FAT12ClusterEntry::DataCluster(0x03)
+                );
+                assert_eq!(
+                    result.fat_clusters[0][1],
+                    FAT12ClusterEntry::DataCluster(0x04)
+                );
+            }
+            Err(_) => panic!("Parser failed"),
+        }
+    }
+
     /// Test parsing 16-bit values
     #[test]
     fn fat_fat16_parser_works() {
@@ -993,13 +1137,27 @@ mod tests {
 
         match fat_fat16_parser_result {
             Ok((_, result)) => {
-                assert_eq!(result.fat_clusters[0].len(), 8189);
-                assert_eq!(result.fat_clusters[0][0], 0x00);
-                assert_eq!(result.fat_clusters[0][1], 0x04);
-                assert_eq!(result.fat_clusters[0][2], 0x05);
-                assert_eq!(result.fat_clusters[0][3], 0x06);
-                assert_eq!(result.fat_clusters[0][4], 0x07);
-                assert_eq!(result.fat_clusters[0][5], 0x08);
+                assert_eq!(result.fat_clusters[0].len(), 5);
+                assert_eq!(
+                    result.fat_clusters[0][0],
+                    FAT16ClusterEntry::DataCluster(0x04)
+                );
+                assert_eq!(
+                    result.fat_clusters[0][1],
+                    FAT16ClusterEntry::DataCluster(0x05)
+                );
+                assert_eq!(
+                    result.fat_clusters[0][2],
+                    FAT16ClusterEntry::DataCluster(0x06)
+                );
+                assert_eq!(
+                    result.fat_clusters[0][3],
+                    FAT16ClusterEntry::DataCluster(0x07)
+                );
+                assert_eq!(
+                    result.fat_clusters[0][4],
+                    FAT16ClusterEntry::DataCluster(0x08)
+                );
             }
             Err(_) => panic!("Parser failed"),
         }

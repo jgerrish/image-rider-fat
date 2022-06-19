@@ -282,6 +282,8 @@ pub fn fat_directory_parser(i: &[u8]) -> IResult<&[u8], FATDirectory> {
     ))
 }
 
+/// Parse a FAT DOS time
+/// Assume a value of zero is an invalid date / reserved field
 pub fn parse_dos_time(dos_time: u16) -> Option<Time> {
     // Assume a value of zero is an "invalid" time and the field is a
     // "reserved" field
@@ -302,7 +304,7 @@ pub fn parse_dos_time(dos_time: u16) -> Option<Time> {
     }
 }
 
-/// Parse a FAT date
+/// Parse a FAT DOS date
 /// Assume a value of zero is an invalid date / reserved field
 pub fn parse_dos_date(dos_date: u16) -> Option<Date> {
     // Assume a value of zero is an "invalid" date and the field is a
