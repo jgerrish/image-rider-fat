@@ -297,16 +297,78 @@ pub enum MediaDescriptor {
     AltosFixedDisk,
 }
 */
+// logical sectors per cluster, allowed values are 1, 2, 4, 8, 16,
+// 32, 64, and 128.
+#[derive(Clone, Copy, Debug, PartialEq, PartialOrd)]
+pub enum LogicalSectorsPerCluster {
+    /// One sector per cluster
+    One = 1,
+    /// Two sectors per cluster
+    Two = 2,
+    /// Four sectors per cluster
+    Four = 4,
+    /// Eightsectors per cluster
+    Eight = 8,
+    /// Sixteen sectors per cluster
+    Sixteen = 16,
+    /// ThirtyTwo sectors per cluster
+    ThirtyTwo = 32,
+    /// SixtyFour sectors per cluster
+    SixtyFour = 64,
+    /// OneTwentyEight sectors per cluster
+    OneTwentyEight = 128,
+}
 
-/// The BIOS Parameter Block occurs after the first four bytes of the Boot Sector
-/// This structure is 13 bytes
+impl From<u8> for LogicalSectorsPerCluster {
+    fn from(num: u8) -> LogicalSectorsPerCluster {
+        match num {
+            1 => LogicalSectorsPerCluster::One,
+            2 => LogicalSectorsPerCluster::Two,
+            4 => LogicalSectorsPerCluster::Four,
+            8 => LogicalSectorsPerCluster::Eight,
+            16 => LogicalSectorsPerCluster::Sixteen,
+            32 => LogicalSectorsPerCluster::ThirtyTwo,
+            64 => LogicalSectorsPerCluster::SixtyFour,
+            128 => LogicalSectorsPerCluster::OneTwentyEight,
+            _ => {
+                error!("Logical sectors per cluster is invalid: {}", num);
+                panic!("Logical sectors per cluster is invalid: {}", num);
+            }
+        }
+    }
+}
+
+impl From<LogicalSectorsPerCluster> for u8 {
+    fn from(num: LogicalSectorsPerCluster) -> u8 {
+        match num {
+            LogicalSectorsPerCluster::One => 1,
+            LogicalSectorsPerCluster::Two => 2,
+            LogicalSectorsPerCluster::Four => 4,
+            LogicalSectorsPerCluster::Eight => 8,
+            LogicalSectorsPerCluster::Sixteen => 16,
+            LogicalSectorsPerCluster::ThirtyTwo => 32,
+            LogicalSectorsPerCluster::SixtyFour => 64,
+            LogicalSectorsPerCluster::OneTwentyEight => 128,
+        }
+    }
+}
+
+impl Display for LogicalSectorsPerCluster {
+    fn fmt(&self, f: &mut Formatter<'_>) -> Result {
+        let val: u8 = (*self).try_into().unwrap();
+        write!(f, "{}", val)
+    }
+}
+
+/// The BIOS Parameter Block occurs after the Boot Sector. \
+/// This structure is 13 bytes.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct BIOSParameterBlock {
     /// Number of bytes per logical sector, usually 512
     pub bytes_per_logical_sector: u16,
-    /// Logical sectors per cluster, valid values are one and powers of two up to and
-    /// including 128
-    pub logical_sectors_per_cluster: u8,
+    /// Logical sectors per cluster, valid values are powers of two
+    /// from one up to and including 128.
+    pub logical_sectors_per_cluster: LogicalSectorsPerCluster,
     /// Count of reserved logical sectors, the number of logical clusters before the first
     /// FAT in the filesystem
     pub count_of_reserved_logical_sectors: u16,
@@ -571,6 +633,16 @@ pub fn bios_parameter_block_parser(i: &[u8]) -> IResult<&[u8], BIOSParameterBloc
     let (i, total_logical_sectors) = le_u16(i)?;
     let (i, media_descriptor) = verify(le_u8, verify_media_descriptor)(i)?;
     let (i, logical_sectors_per_fat) = le_u16(i)?;
+
+    let logical_sectors_per_cluster: LogicalSectorsPerCluster = logical_sectors_per_cluster.into();
+
+    // Constriant from FAT: General Overview of On-Disk Format
+    let bytes_per_cluster =
+        (bytes_per_logical_sector as u32 * logical_sectors_per_cluster as u32) as u32;
+    if bytes_per_cluster > 32768 {
+        error!("Bytes per cluster is too large: {}", bytes_per_cluster);
+        panic!("Bytes per cluster is too large: {}", bytes_per_cluster);
+    }
 
     let bios_parameter_block = BIOSParameterBlock {
         bytes_per_logical_sector,
@@ -908,11 +980,76 @@ mod tests {
         }
     }
 
+    /// Test that logical sectors per cluster valid works
+    #[test]
+    fn logical_sectors_per_cluster_valid_works() {
+        let mut image_data = [0; 512];
+
+        // logical sectors per cluster
+        image_data[13] = 0x80;
+        // media descriptor
+        image_data[21] = 0xFC;
+
+        let fat_disk_parser_result = fat_boot_sector_parser(&None)(&image_data);
+
+        match fat_disk_parser_result {
+            Ok((_i, _result)) => {
+                assert!(true);
+            }
+            Err(_) => panic!("Invalid BIOS Parameter Block"),
+        }
+    }
+
+    /// Test that logical sectors per cluster invalid fails
+    #[test]
+    #[should_panic(expected = "Logical sectors per cluster is invalid: 129")]
+    fn logical_sectors_per_cluster_invalid_panics() {
+        let mut image_data = [0; 512];
+
+        // logical sectors per cluster
+        image_data[13] = 0x81;
+        // media descriptor
+        image_data[21] = 0xFC;
+
+        let fat_disk_parser_result = fat_boot_sector_parser(&None)(&image_data);
+
+        match fat_disk_parser_result {
+            Ok((_i, _result)) => {
+                assert!(true);
+            }
+            Err(_) => panic!("Invalid BIOS Parameter Block"),
+        }
+    }
+
+    /// Test that bytes per cluster is in range
+    #[test]
+    #[should_panic(expected = "Bytes per cluster is too large: 65536")]
+    fn bytes_per_cluster_too_large() {
+        let mut image_data = [0; 512];
+
+        // Bytes per logical sector
+        image_data[11] = 0x00;
+        image_data[12] = 0x80;
+        // logical sectors per cluster
+        image_data[13] = 0x02;
+        // media descriptor
+        image_data[21] = 0xFC;
+
+        let fat_disk_parser_result = fat_boot_sector_parser(&None)(&image_data);
+
+        match fat_disk_parser_result {
+            Ok((_i, _result)) => {
+                assert!(true);
+            }
+            Err(_) => panic!("Invalid BIOS Parameter Block"),
+        }
+    }
+
     /// Test that parsing a valid media descriptor fails
     #[test]
     fn valid_media_descriptor_passes() {
         let bios_parameter_block: [u8; 13] = [
-            0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0xFC, 0x00, 0x00,
+            0x00, 0x00, 0x01, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0xFC, 0x00, 0x00,
         ];
 
         let bios_parameter_block_parser_result = bios_parameter_block_parser(&bios_parameter_block);
@@ -944,6 +1081,9 @@ mod tests {
     fn valid_generic_media_descriptor_passes() {
         let mut image_data = [0; 512];
 
+        // logical sectors per cluster
+        image_data[13] = 0x01;
+        // media descriptor
         image_data[21] = 0xFC;
 
         let fat_disk_parser_result = fat_boot_sector_parser(&None)(&image_data);

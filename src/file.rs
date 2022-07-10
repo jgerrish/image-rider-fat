@@ -40,54 +40,6 @@ pub fn get_file_data(disk: FATDisk, filename: &str) -> Vec<u8> {
         }
     };
 
-    // Sanity check and to make casts easier to reason about and
-    // for safety.
-    // DO NOT REMOVE
-    // This should be baked into the type.
-    if disk
-        .fat_boot_sector
-        .bios_parameter_block
-        .bytes_per_logical_sector
-        > 16384
-    {
-        error!(
-            "Bytes per logical sector seems too large: {}",
-            disk.fat_boot_sector
-                .bios_parameter_block
-                .bytes_per_logical_sector
-        );
-        panic!(
-            "Bytes per logical sector seems too large: {}",
-            disk.fat_boot_sector
-                .bios_parameter_block
-                .bytes_per_logical_sector
-        );
-    }
-
-    // logical sectors per cluster, allowed values are 1, 2, 4, 8, 16,
-    // 32, 64, and 128.
-    // DO NOT REMOVE
-    // This should be baked into the type.
-    if disk
-        .fat_boot_sector
-        .bios_parameter_block
-        .logical_sectors_per_cluster
-        > 128
-    {
-        error!(
-            "Logical sectors per cluster seems too large: {}",
-            disk.fat_boot_sector
-                .bios_parameter_block
-                .logical_sectors_per_cluster
-        );
-        panic!(
-            "Logical sectors per cluster seems too large: {}",
-            disk.fat_boot_sector
-                .bios_parameter_block
-                .logical_sectors_per_cluster
-        );
-    }
-
     let file = disk
         .directory_table
         .directory_by_filename
@@ -175,7 +127,7 @@ mod tests {
     use crate::directory_table::{FATDirectory, FATDirectoryEntry, FileType};
     use crate::fat::{
         BIOSParameterBlock, DOS3FATBootSector, FATBootSector, FATBootSectorSignature,
-        FATBootSectorStart, FATDisk,
+        FATBootSectorStart, FATDisk, LogicalSectorsPerCluster,
     };
     use log::error;
 
@@ -188,7 +140,7 @@ mod tests {
     fn build_bios_parameter_block() -> BIOSParameterBlock {
         BIOSParameterBlock {
             bytes_per_logical_sector: 512,
-            logical_sectors_per_cluster: 2,
+            logical_sectors_per_cluster: LogicalSectorsPerCluster::Two,
             count_of_reserved_logical_sectors: 1,
             number_of_fats: 2,
             maximum_number_of_root_directory_entries: 112,
@@ -238,11 +190,7 @@ mod tests {
     }
 
     /// Build a FAT disk with a file with data
-    fn build_disk_with_file<'a>(
-        filename: &str,
-        filedata: &'a [u8],
-        filesize: u32,
-    ) -> FATDisk<'a> {
+    fn build_disk_with_file<'a>(filename: &str, filedata: &'a [u8], filesize: u32) -> FATDisk<'a> {
         let dos3_boot_sector = build_dos3_boot_sector();
         let bios_parameter_block = build_bios_parameter_block();
         let fat_boot_sector_start = FATBootSectorStart::DOS3(dos3_boot_sector);

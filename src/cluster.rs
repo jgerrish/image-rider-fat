@@ -377,7 +377,7 @@ pub enum FATType {
 }
 
 /// Display a File Allocation Table Type
-impl<'a> Display for FATType {
+impl Display for FATType {
     fn fmt(&self, f: &mut Formatter<'_>) -> Result {
         match self {
             FATType::FAT12 => write!(f, "FAT12"),
@@ -837,7 +837,7 @@ mod tests {
     #[allow(unused_imports)]
     use crate::fat::{
         BIOSParameterBlock, DOS3FATBootSector, FATBootSector, FATBootSectorSignature,
-        FATBootSectorStart,
+        FATBootSectorStart, LogicalSectorsPerCluster,
     };
     #[allow(unused_imports)]
     use std::collections::HashMap;
@@ -1067,7 +1067,7 @@ mod tests {
             }),
             bios_parameter_block: BIOSParameterBlock {
                 bytes_per_logical_sector: 512,
-                logical_sectors_per_cluster: 4,
+                logical_sectors_per_cluster: LogicalSectorsPerCluster::Four,
                 count_of_reserved_logical_sectors: 4,
                 number_of_fats: 2,
                 maximum_number_of_root_directory_entries: 512,
@@ -1121,7 +1121,7 @@ mod tests {
             }),
             bios_parameter_block: BIOSParameterBlock {
                 bytes_per_logical_sector: 512,
-                logical_sectors_per_cluster: 4,
+                logical_sectors_per_cluster: LogicalSectorsPerCluster::Four,
                 count_of_reserved_logical_sectors: 4,
                 number_of_fats: 2,
                 maximum_number_of_root_directory_entries: 512,

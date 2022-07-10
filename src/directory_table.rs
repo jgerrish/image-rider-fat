@@ -327,7 +327,7 @@ pub fn fat_directory_parser(i: &[u8]) -> IResult<&[u8], FATDirectory> {
     ))
 }
 
-/// Parse a FAT DOS time
+/// Parse a FAT DOS time.
 /// Assume a value of zero is an invalid date / reserved field
 /// Return None if the time is invalid
 ///
@@ -374,7 +374,7 @@ pub fn parse_dos_time(dos_time: u16) -> Option<Time> {
     }
 }
 
-/// Parse a FAT DOS date
+/// Parse a FAT DOS date.
 /// If a date is invalid, a value of None is returned.
 ///
 /// From FAT: General Overview of On-Disk Format \
@@ -406,7 +406,8 @@ pub fn parse_dos_date(dos_date: u16) -> Option<Date> {
     }
 
     let year: i32 = ((dos_date >> 9) & 0x7F) as i32;
-    if (year < 0) || (year > 127) {
+    // equivalent to (year < 0) || (year > 127)
+    if !(0..=127).contains(&year) {
         return None;
     }
 
@@ -427,14 +428,14 @@ pub fn parse_dos_date(dos_date: u16) -> Option<Date> {
         10 => Month::October,
         11 => Month::November,
         12 => Month::December,
-        _ => {
-            return None
-        },
+        _ => return None,
     };
 
     let day = (dos_date & 0x1F) as u8;
+
     // Check that the day value is in range
-    if (day < 1) || (day > 31) {
+    // equivalent to (day < 1) || (day > 31)
+    if !(1..=31).contains(&day) {
         return None;
     }
 
@@ -448,8 +449,10 @@ pub fn parse_dos_date(dos_date: u16) -> Option<Date> {
 
 #[cfg(test)]
 mod tests {
+    use super::{
+        fat_directory_entry_parser, fat_directory_parser, parse_dos_date, parse_dos_time, FileType,
+    };
     use time::Month;
-    use super::{fat_directory_entry_parser, fat_directory_parser, parse_dos_date, parse_dos_time, FileType};
 
     /// Test that parsing a FAT12 directory entry works
     #[test]
@@ -538,7 +541,6 @@ mod tests {
             Err(e) => panic!("Error parsing directory table: {}", e),
         }
     }
-
 
     #[test]
     fn parse_dos_date_works() {
