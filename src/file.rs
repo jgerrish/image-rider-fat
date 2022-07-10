@@ -6,9 +6,17 @@ use crate::fat::FATDisk;
 /// Get the file data for a file.
 /// This function is only valid for FAT12.
 /// It uses the data region as cluster data.
-/// This should help with future refactors to more efficiently
-/// write to block devices.
-pub fn get_file_data(disk: FATDisk, filename: &String) -> Vec<u8> {
+///
+/// # Arguments
+///
+/// - `disk` - A FATDisk structure that contains the disk or ROM image
+/// - `filename` - The name of the file to get from the image.
+///
+/// # Returns
+///
+/// A u8 Vec containing the data in the file
+///
+pub fn get_file_data(disk: FATDisk, filename: &str) -> Vec<u8> {
     let mut data = Vec::new();
 
     let fat = match disk.fat {
@@ -231,7 +239,7 @@ mod tests {
 
     /// Build a FAT disk with a file with data
     fn build_disk_with_file<'a>(
-        filename: &String,
+        filename: &str,
         filedata: &'a [u8],
         filesize: u32,
     ) -> FATDisk<'a> {
