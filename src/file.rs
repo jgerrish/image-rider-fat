@@ -1,3 +1,6 @@
+#![warn(missing_docs)]
+#![warn(unsafe_code)]
+//! File parsing helpers and functions
 use log::error;
 
 use crate::cluster::{parse_fat12_value, FAT12ClusterEntry, FAT};
@@ -99,7 +102,6 @@ pub fn get_file_data(disk: FATDisk, filename: &str) -> Vec<u8> {
         data.extend_from_slice(disk.data_region_as_clusters[start_cluster_index as usize]);
     }
 
-    // println!("clusters: {}", indexes.count());
     if clusters_in_file >= 2 {
         for (i, cluster) in indexes.enumerate() {
             if (i + 3) > clusters_in_file.try_into().unwrap() {
@@ -231,7 +233,6 @@ mod tests {
                     // file is a multiple of cluster_size_in_bytes
                     &filedata[start..end]
                 };
-                // println!("Adding data: {:?}\n", data);
                 cluster_data.push(data);
             }
         }

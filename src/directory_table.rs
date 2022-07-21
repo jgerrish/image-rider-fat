@@ -1,5 +1,7 @@
-/// Parse a FAT directory table
-/// This doesn't include any support for VFAT long filenames or other newer features
+#![warn(missing_docs)]
+#![warn(unsafe_code)]
+//! Parse a FAT directory table. \
+//! This doesn't include any support for VFAT long filenames or other newer features. \
 use log::debug;
 use nom::bytes::complete::take;
 use nom::number::complete::{le_u16, le_u32, le_u8};
@@ -14,8 +16,11 @@ use std::{
 /// The first byte for a filename can have special values
 /// If it is zero, the directory entry is available and there are no further entries
 pub enum FileType {
+    /// A normal file
     Normal(FATDirectoryEntry),
+    /// A deleted file
     DeletedEntry(FATDirectoryEntry),
+    /// The last entry in a directory
     LastEntry,
 }
 
@@ -209,7 +214,6 @@ pub fn fat_directory_entry_parser(i: &[u8]) -> IResult<&[u8], FileType> {
             // return Err(Err::Error(nom::error_position!(i, ErrorKind::Fail)));
         }
     };
-    debug!("Read filename: {}", filename);
     let filename = String::from(filename.trim_end_matches(' '));
 
     let (i, file_extension_padded) = take(3_usize)(i)?;
@@ -309,7 +313,6 @@ pub fn fat_directory_parser(i: &[u8]) -> IResult<&[u8], FATDirectory> {
             FileType::Normal(ref e) => {
                 let new_entry = e.clone();
                 directory_entries.push(directory_entry);
-                debug!("Adding filename: {}\n", new_entry.full_filename.clone());
                 directory_by_filename.insert(new_entry.full_filename.clone(), new_entry);
             }
             FileType::DeletedEntry(_) => {

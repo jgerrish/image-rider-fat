@@ -1,4 +1,6 @@
-/// File Allocation Table Cluster and Cluster Entry structures and functions
+#![warn(missing_docs)]
+#![warn(unsafe_code)]
+//! File Allocation Table Cluster and Cluster Entry structures and functions
 use log::{debug, error};
 use nom::bytes::complete::take;
 use nom::number::complete::le_u16;
@@ -194,8 +196,8 @@ impl<'a> Display for FATFAT16<'a> {
         write!(f, "FAT ID: 0x{:X}, ", self.fat_id)?;
         write!(f, "EOC Marker: 0x{:X}, ", self.eoc_marker)?;
         write!(f, "clusters: ")?;
-        for chain in &self.fat_clusters {
-            write!(f, "new chain: ")?;
+        for (chain_number, chain) in self.fat_clusters.iter().enumerate() {
+            write!(f, "chain 0x{:X}: ", chain_number)?;
             for cluster in chain {
                 write!(f, "0x{:X}, ", cluster)?;
             }
@@ -316,8 +318,8 @@ impl<'a> Display for FATFAT12<'a> {
         write!(f, "FAT ID: 0x{:X}, ", self.fat_id)?;
         write!(f, "EOC Marker: 0x{:X}, ", self.eoc_marker)?;
         write!(f, "clusters: ")?;
-        for chain in &self.fat_clusters {
-            write!(f, "new chain: ")?;
+        for (chain_number, chain) in self.fat_clusters.iter().enumerate() {
+            write!(f, "chain {}: ", chain_number)?;
             for cluster in chain {
                 write!(f, "0x{:X}, ", cluster)?;
             }
@@ -388,9 +390,12 @@ impl Display for FATType {
 
 /// Structure to hold iterator state for iterating from bytes to 12-bit words
 pub struct Into12BitWordIter<'a> {
-    //pub struct IntoIter<'a> {
+    /// The data to generate the iterator from.
     pub data: &'a [u8],
+    /// Index of the current posiition in the data.
     pub index: usize,
+    /// temporary data needed since we're parsing groups of bytes into
+    /// 12-bit words.
     pub temp: Option<u16>,
 }
 
@@ -481,6 +486,7 @@ impl Iterator for Into12BitWordIter<'_> {
 /// The data structure to iterate through cluster entries
 // TODO: Rename some of these iterator structures, can be integrated elsewhere
 pub struct FAT12ClusterChain<'a> {
+    /// End of Chain marker for this cluster chain
     pub eoc_marker: u16,
     /// The raw cluster data
     /// TODO: Decide on the preferred interface
@@ -491,8 +497,11 @@ pub struct FAT12ClusterChain<'a> {
 
 /// The iterator state structure for iterating from 12-bit words to FAT12ClusterEntry values
 pub struct IntoFAT12ClusterChainIter<'a> {
+    /// The cluster chain entries to generate the iterator from.
     pub data: &'a [u16],
+    /// index of the current position in the data.
     pub index: usize,
+    /// The EOC marker for this FAT.
     pub eoc_marker: u16,
 }
 
@@ -594,7 +603,6 @@ pub fn fat_fat12_parser<'a>(
             // There may be a better pattern for this
             let mut fat_entry_1 = parse_fat12_value(fat_entries_new[0]);
             let mut fat_entry_2 = parse_fat12_value(fat_entries_new[1]);
-            print!("{}{}", fat_entry_1, fat_entry_2);
 
             let mut chain = Vec::new();
             // read until the EOC marker is found or the end of the FAT
@@ -618,13 +626,11 @@ pub fn fat_fat12_parser<'a>(
 
                 fat_entry_1 = parse_fat12_value(fat_entries_new[0]);
                 fat_entry_2 = parse_fat12_value(fat_entries_new[1]);
-                print!("{}{}", fat_entry_1, fat_entry_2);
             }
             if !chain.is_empty() {
                 fat_clusters.push(chain);
             }
         }
-        println!();
 
         let (i, _) = take(max - (cnt + 3))(index)?;
 
@@ -658,8 +664,9 @@ pub fn fat_fat12_parser<'a>(
 
 /// Structure to hold iterator state for iterating from bytes to 16-bit words
 pub struct Into16BitWordIter<'a> {
-    //pub struct IntoIter<'a> {
+    /// The data to generate the iterator from.
     pub data: &'a [u8],
+    /// Index of the current posiition in the data.
     pub index: usize,
 }
 
@@ -714,6 +721,7 @@ impl Iterator for Into16BitWordIter<'_> {
 /// The data structure to iterate through cluster entries
 // TODO: Rename some of these iterator structures, can be integrated elsewhere
 pub struct FAT16ClusterChain<'a> {
+    /// End of Chain marker for this cluster chain
     pub eoc_marker: u16,
     /// The raw cluster data
     /// TODO: Decide on the preferred interface
@@ -724,8 +732,11 @@ pub struct FAT16ClusterChain<'a> {
 
 /// The iterator state structure for iterating from 12-bit words to FAT12ClusterEntry values
 pub struct IntoFAT16ClusterChainIter<'a> {
+    /// The cluster chain entries to generate the iterator from.
     pub data: &'a [u16],
+    /// index of the current position in the data.
     pub index: usize,
+    /// The EOC marker for this FAT.
     pub eoc_marker: u16,
 }
 

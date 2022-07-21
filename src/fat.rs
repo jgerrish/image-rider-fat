@@ -1,14 +1,16 @@
-/// Parse a MS-DOS FAT filesystem
-///
-/// These parsing routines will mis-identify data since they're only doing minimal
-/// checking right now.
-///
-/// FAT uses little-endian for all entries in the header,
-/// except for some entries in the Atari ST boot sectors
-/// The first three bytes are a jump instruction
-/// Byte zero is a jump:
-/// either a short jump followed by a NOP: 0xEB 0x?? 0x90
-/// or a near jump 0xE9 0x?? 0x??
+#![warn(missing_docs)]
+#![warn(unsafe_code)]
+//! Parse a MS-DOS FAT filesystem. \
+//!
+//! These parsing routines will mis-identify data since they're only doing minimal
+//! checking right now. \
+//!
+//! FAT uses little-endian for all entries in the header, \
+//! except for some entries in the Atari ST boot sectors. \
+//! The first three bytes are a jump instruction. \
+//! Byte zero is a jump: \
+//! either a short jump followed by a NOP: 0xEB 0x?? 0x90
+//! or a near jump 0xE9 0x?? 0x??
 use log::{debug, error, warn};
 use nom::bytes::complete::take;
 use nom::combinator::verify;
@@ -21,6 +23,7 @@ use std::fmt::{Display, Formatter, Result};
 
 use crate::cluster::{fat_fat12_parser, fat_fat16_parser, FATType, FAT};
 use crate::directory_table::{fat_directory_parser, FATDirectory};
+use crate::init;
 use crate::sanity_check::SanityCheck;
 
 /// A DOS FAT disk
@@ -698,6 +701,20 @@ pub fn parse_data_region_as_clusters(
         let cluster_size_in_bytes =
             (bpb.logical_sectors_per_cluster as u16 * bpb.bytes_per_logical_sector) as u64;
 
+        // Integer division rounds towards zero
+        // The Rust Language Reference - Operator Expressions
+        // If the length is 2048 and cluster_size_in_bytes is 1024,
+        // number of clusters would be 2.
+        // If the length is 2000 and cluster_size_in_bytes is 1024,
+        // than num_clusters is 1.
+        // We'll log a warning about that situation
+        if (i.len() % cluster_size_in_bytes as usize) != 0 {
+            warn!(
+                "Length in data region {} is not a multiple of the cluster size in bytes {}",
+                i.len(),
+                cluster_size_in_bytes,
+            );
+        }
         let num_clusters = i.len() / cluster_size_in_bytes as usize;
 
         if (num_clusters * 2) != bpb.total_logical_sectors.try_into().unwrap() {
@@ -760,6 +777,9 @@ pub fn fat_disk_parser<'a>(
     filesystem_bits: Option<u8>,
     root_dir_loc: &'a Option<u32>,
 ) -> impl Fn(&[u8]) -> IResult<&[u8], FATDisk> + 'a {
+    // Initialize the crate
+    init();
+
     move |i| {
         // Read in 512 bytes as 256 big-endian words for the checksum
         // This is also in the main image-rider code

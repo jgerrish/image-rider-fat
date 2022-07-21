@@ -45,6 +45,10 @@ struct Args {
     /// Specify an output filename to write to
     #[clap(short, long)]
     output: Option<String>,
+
+    /// Verbose mode will print information while parsing the image file
+    #[clap(short, long)]
+    verbose: bool,
 }
 
 /// Open up a file and read in the data
@@ -113,7 +117,9 @@ fn main() {
             exit(1);
         }
         Ok(res) => {
-            println!("Disk: {}", res.1);
+            if args.verbose {
+                println!("Disk: {}", res.1);
+            }
             res
         }
     };
