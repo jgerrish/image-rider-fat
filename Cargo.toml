@@ -1,6 +1,6 @@
 [package]
 name = "image-rider-fat"
-version = "0.2.0"
+version = "0.3.0"
 edition = "2021"
 authors = ["Joshua Gerrish <jgerrish@gmail.com>"]
 description = "Rust nom parser to read FAT file systems"
@@ -11,7 +11,7 @@ homepage = "https://github.com/jgerrish/image-rider-fat"
 license = "MIT"
 
 [dependencies]
-config = "0.12"
+config = "0.13"
 unicode-width = "0.1"
 clap = { version = "3.1", features = ["derive"] }
 log = "0.4"
@@ -21,6 +21,7 @@ rust-embed = "6.3"
 toml = "0.5"
 insta = "1.13"
 nom = "7.1"
+fat-date-time = "0.1"
 time = "0.3"
 
 [dev-dependencies]

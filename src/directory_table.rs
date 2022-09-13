@@ -2,16 +2,18 @@
 #![warn(unsafe_code)]
 //! Parse a FAT directory table. \
 //! This doesn't include any support for VFAT long filenames or other newer features. \
+use fat_date_time::{parse_fat_date, parse_fat_time};
 use log::debug;
 use nom::bytes::complete::take;
 use nom::number::complete::{le_u16, le_u32, le_u8};
 use nom::IResult;
-use time::{Date, Month, Time};
 
 use std::{
     collections::HashMap,
     fmt::{Display, Formatter, Result},
 };
+
+use time::{Date, Time};
 
 /// The first byte for a filename can have special values
 /// If it is zero, the directory entry is available and there are no further entries
@@ -38,7 +40,7 @@ impl Display for FileType {
 
 /// A FATDirectoryEntry is a single directory entry, for example a
 /// file or a subdirectory.  A single directory entry is 32-bits long.
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Debug, Eq, PartialEq)]
 pub struct FATDirectoryEntry {
     /// Filename and extension
     pub full_filename: String,
@@ -233,16 +235,16 @@ pub fn fat_directory_entry_parser(i: &[u8]) -> IResult<&[u8], FileType> {
     let (i, user_attributes) = le_u8(i)?;
     let (i, deleted_file_first_character) = le_u8(i)?;
     let (i, create_time) = le_u16(i)?;
-    let create_time = parse_dos_time(create_time);
+    let create_time = parse_fat_time(create_time);
     let (i, create_date) = le_u16(i)?;
-    let create_date = parse_dos_date(create_date);
+    let create_date = parse_fat_date(create_date);
     let (i, last_access_date) = le_u16(i)?;
-    let last_access_date = parse_dos_date(last_access_date);
+    let last_access_date = parse_fat_date(last_access_date);
     let (i, extended_attributes) = le_u16(i)?;
     let (i, last_modified_time) = le_u16(i)?;
-    let last_modified_time = parse_dos_time(last_modified_time);
+    let last_modified_time = parse_fat_time(last_modified_time);
     let (i, last_modified_date) = le_u16(i)?;
-    let last_modified_date = parse_dos_date(last_modified_date);
+    let last_modified_date = parse_fat_date(last_modified_date);
     let (i, start_of_file) = le_u16(i)?;
     let (i, file_size) = le_u32(i)?;
 
@@ -330,132 +332,9 @@ pub fn fat_directory_parser(i: &[u8]) -> IResult<&[u8], FATDirectory> {
     ))
 }
 
-/// Parse a FAT DOS time.
-/// Assume a value of zero is an invalid date / reserved field
-/// Return None if the time is invalid
-///
-/// From FAT: General Overview of On-Disk Format \
-/// MS-DOS epoch is 01/01/1980 \
-/// Bits 0-4: 2-second count, valid value range 0-29 inclusive (0 - 58 seconds). \
-/// Bits 5-10: Minutes, valid value range 0-59 inclusive. \
-/// Bits 11-15: Hours, valid value range 0-23 inclusive. \
-///
-/// # Examples
-///
-/// ```
-/// use image_rider_fat::directory_table::parse_dos_time;
-///
-/// let time = parse_dos_time(0xbf7d);
-///
-/// assert!(time.is_some());
-/// assert_eq!(time.unwrap().hour(), 23);
-/// assert_eq!(time.unwrap().minute(), 59);
-/// assert_eq!(time.unwrap().second(), 58);
-/// ```
-pub fn parse_dos_time(dos_time: u16) -> Option<Time> {
-    // Assume a value of zero is an "invalid" time and the field is a
-    // "reserved" field
-    // This isn't always true, some utilities may not write a time
-    let hours = ((dos_time >> 11) as u8) & 0x1F;
-    if hours > 23 {
-        return None;
-    }
-    let minutes = ((dos_time >> 5) as u8) & 0x3F;
-    if minutes > 59 {
-        return None;
-    }
-    let seconds = (dos_time & 0x1F) as u8;
-    if seconds > 29 {
-        return None;
-    }
-
-    let time = Time::from_hms(hours, minutes, seconds * 2);
-
-    match time {
-        Ok(t) => Some(t),
-        Err(e) => panic!("Couldn't parse time: {}", e),
-    }
-}
-
-/// Parse a FAT DOS date.
-/// If a date is invalid, a value of None is returned.
-///
-/// From FAT: General Overview of On-Disk Format \
-/// The valid time range is from Midnight 00:00:00 to 23:59:58. \
-/// Bits 0-4: Day of month, valid value range 1-31 inclusive. \
-/// Bits 5-8: Month of year, 1 = January, valid value range 1-12 inclusive. \
-/// Bits 9-15: Count of years from 1980, valid value range 0-127 inclusive (1980-2107). \
-///
-/// # Examples
-///
-/// ```
-/// use image_rider_fat::directory_table::parse_dos_date;
-/// use time::Month;
-///
-/// let date = parse_dos_date(0xff9f);
-///
-/// assert!(date.is_some());
-/// assert_eq!(date.unwrap().year(), 2107);
-/// assert_eq!(date.unwrap().month(), Month::December);
-/// assert_eq!(date.unwrap().day(), 31);
-///
-/// ```
-pub fn parse_dos_date(dos_date: u16) -> Option<Date> {
-    // Assume a value of zero is an "invalid" date and the field is a
-    // "reserved" field
-    // This isn't always true, some utilities may not write a date
-    if dos_date == 0 {
-        return None;
-    }
-
-    let year: i32 = ((dos_date >> 9) & 0x7F) as i32;
-    // equivalent to (year < 0) || (year > 127)
-    if !(0..=127).contains(&year) {
-        return None;
-    }
-
-    let year = year + 1980;
-
-    let month = (dos_date >> 5) & 0x0f;
-
-    let month = match month {
-        1 => Month::January,
-        2 => Month::February,
-        3 => Month::March,
-        4 => Month::April,
-        5 => Month::May,
-        6 => Month::June,
-        7 => Month::July,
-        8 => Month::August,
-        9 => Month::September,
-        10 => Month::October,
-        11 => Month::November,
-        12 => Month::December,
-        _ => return None,
-    };
-
-    let day = (dos_date & 0x1F) as u8;
-
-    // Check that the day value is in range
-    // equivalent to (day < 1) || (day > 31)
-    if !(1..=31).contains(&day) {
-        return None;
-    }
-
-    let date = Date::from_calendar_date(year, month, day);
-
-    match date {
-        Ok(d) => Some(d),
-        Err(e) => panic!("Couldn't parse date: {}", e),
-    }
-}
-
 #[cfg(test)]
 mod tests {
-    use super::{
-        fat_directory_entry_parser, fat_directory_parser, parse_dos_date, parse_dos_time, FileType,
-    };
-    use time::Month;
+    use super::{fat_directory_entry_parser, fat_directory_parser, FileType};
 
     /// Test that parsing a FAT12 directory entry works
     #[test]
@@ -543,78 +422,5 @@ mod tests {
             }
             Err(e) => panic!("Error parsing directory table: {}", e),
         }
-    }
-
-    #[test]
-    fn parse_dos_date_works() {
-        // Date value of zero
-        let date = parse_dos_date(0);
-        assert!(date.is_none());
-
-        // The earliest possible "valid" date, given the specification in
-        // FAT: General Overview of On-Disk Format
-        let date = parse_dos_date(0b0000000000100001);
-
-        assert!(date.is_some());
-        assert_eq!(date.unwrap().year(), 1980);
-        assert_eq!(date.unwrap().month(), Month::January);
-        assert_eq!(date.unwrap().day(), 1);
-
-        // The latest possible date
-        let date = parse_dos_date(0b1111111110011111);
-
-        assert!(date.is_some());
-        assert_eq!(date.unwrap().year(), 2107);
-        assert_eq!(date.unwrap().month(), Month::December);
-        assert_eq!(date.unwrap().day(), 31);
-
-        // The date with bit 1 set for year, month and day.
-        let date = parse_dos_date(0b0000001000100001);
-
-        assert!(date.is_some());
-        assert_eq!(date.unwrap().year(), 1981);
-        assert_eq!(date.unwrap().month(), Month::January);
-        assert_eq!(date.unwrap().day(), 1);
-
-        // Test date with day < 1
-        let date = parse_dos_date(0b0000000000100000);
-        assert!(date.is_none());
-
-        // Test date with month < 1
-        let date = parse_dos_date(0b0000000000000001);
-        assert!(date.is_none());
-
-        // Test date with month > 12
-        let date = parse_dos_date(0b0000000110100001);
-        assert!(date.is_none());
-    }
-
-    #[test]
-    fn parse_dos_time_works() {
-        // Test the earlier possible time
-        let time = parse_dos_time(0);
-        assert!(time.is_some());
-        assert_eq!(time.unwrap().hour(), 0);
-        assert_eq!(time.unwrap().minute(), 0);
-        assert_eq!(time.unwrap().second(), 0);
-
-        // Test the latest possible time
-        let time = parse_dos_time(0b1011111101111101);
-        assert!(time.is_some());
-        assert_eq!(time.unwrap().hour(), 23);
-        assert_eq!(time.unwrap().minute(), 59);
-        assert_eq!(time.unwrap().second(), 58);
-
-        // Test second value > 29
-        let time = parse_dos_time(0b1011111101111110);
-        assert!(time.is_none());
-
-        // Test minute value > 59
-        let time = parse_dos_time(0b1011111110011101);
-        assert!(time.is_none());
-
-        // Test hour value > 23
-        let time = parse_dos_time(0b1100011101111101);
-        assert!(time.is_none());
     }
 }

@@ -14,7 +14,7 @@ use std::{
 use super::fat::FATBootSector;
 
 /// The meaning of entries in the FAT cluster map
-#[derive(Clone, Copy, Debug, PartialEq)]
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum FAT12ClusterEntry {
     /// Indicates a free cluster or or parent cluster starting directory
     /// Valid values: 0x000
@@ -99,7 +99,7 @@ pub fn parse_fat12_value(value: u16) -> FAT12ClusterEntry {
 }
 
 /// TODO: Find correct values
-#[derive(Clone, Copy, Debug, PartialEq)]
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum FAT16ClusterEntry {
     /// Indicates a free cluster or or parent cluster starting directory
     /// Valid values: 0x000
@@ -162,7 +162,7 @@ pub fn parse_fat16_value(value: u16) -> FAT16ClusterEntry {
 
 /// A DOS File Allocation Table (FAT)
 /// Each two-byte entry in FAT16 is little-endian
-#[derive(Debug, PartialEq)]
+#[derive(Debug, Eq, PartialEq)]
 pub struct FATFAT16<'a> {
     /// The FAT ID
     pub fat_id: u16,
@@ -281,7 +281,7 @@ pub fn fat_fat16_parser<'a>(
 
 /// A DOS File Allocation Table (FAT)
 /// Each two-byte entry in FAT16 is little-endian
-#[derive(Debug, PartialEq)]
+#[derive(Debug, Eq, PartialEq)]
 pub struct FATFAT12<'a> {
     /// The FAT ID
     pub fat_id: u16,
@@ -790,7 +790,7 @@ impl Iterator for IntoFAT16ClusterChainIter<'_> {
 
 /// The actual File Allocation Table in the FAT filesystem
 /// This project only supports older filesystems
-#[derive(Debug, PartialEq)]
+#[derive(Debug, Eq, PartialEq)]
 pub enum FAT<'a> {
     /// FAT12 File Allocation Table
     FAT12(FATFAT12<'a>),

@@ -302,7 +302,7 @@ pub enum MediaDescriptor {
 */
 // logical sectors per cluster, allowed values are 1, 2, 4, 8, 16,
 // 32, 64, and 128.
-#[derive(Clone, Copy, Debug, PartialEq, PartialOrd)]
+#[derive(Clone, Copy, Debug, Eq, PartialEq, PartialOrd)]
 pub enum LogicalSectorsPerCluster {
     /// One sector per cluster
     One = 1,
@@ -365,7 +365,7 @@ impl Display for LogicalSectorsPerCluster {
 
 /// The BIOS Parameter Block occurs after the Boot Sector. \
 /// This structure is 13 bytes.
-#[derive(Clone, Copy, Debug, PartialEq)]
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct BIOSParameterBlock {
     /// Number of bytes per logical sector, usually 512
     pub bytes_per_logical_sector: u16,
