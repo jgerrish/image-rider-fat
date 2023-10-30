@@ -640,8 +640,7 @@ pub fn bios_parameter_block_parser(i: &[u8]) -> IResult<&[u8], BIOSParameterBloc
     let logical_sectors_per_cluster: LogicalSectorsPerCluster = logical_sectors_per_cluster.into();
 
     // Constriant from FAT: General Overview of On-Disk Format
-    let bytes_per_cluster =
-        (bytes_per_logical_sector as u32 * logical_sectors_per_cluster as u32) as u32;
+    let bytes_per_cluster = bytes_per_logical_sector as u32 * logical_sectors_per_cluster as u32;
     if bytes_per_cluster > 32768 {
         error!("Bytes per cluster is too large: {}", bytes_per_cluster);
         panic!("Bytes per cluster is too large: {}", bytes_per_cluster);
