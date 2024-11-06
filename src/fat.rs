@@ -358,7 +358,7 @@ impl From<LogicalSectorsPerCluster> for u8 {
 
 impl Display for LogicalSectorsPerCluster {
     fn fmt(&self, f: &mut Formatter<'_>) -> Result {
-        let val: u8 = (*self).try_into().unwrap();
+        let val: u8 = (*self).into();
         write!(f, "{}", val)
     }
 }
@@ -693,6 +693,8 @@ pub fn calculate_boot_sector_sum_from_words(sector_data: &[u8]) -> bool {
 /// Read in the data regions as a vector of clusters
 /// This DOES NOT read it in as sectors, but clusters.
 /// Use the BPB to calculate the proper block sizes it returns
+///
+/// TODO: Add more tests here
 pub fn parse_data_region_as_clusters(
     bpb: &BIOSParameterBlock,
 ) -> impl Fn(&[u8]) -> IResult<&[u8], Vec<&[u8]>> + '_ {
@@ -716,7 +718,7 @@ pub fn parse_data_region_as_clusters(
         }
         let num_clusters = i.len() / cluster_size_in_bytes as usize;
 
-        if (num_clusters * 2) != bpb.total_logical_sectors.try_into().unwrap() {
+        if (num_clusters * 2) != bpb.total_logical_sectors.into() {
             warn!(
                 "Invalid number of sectors calculated: expected: {}, calculated: {}",
                 bpb.total_logical_sectors,
