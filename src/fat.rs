@@ -27,24 +27,35 @@ use crate::init;
 use crate::sanity_check::SanityCheck;
 
 /// A DOS FAT disk
-pub struct FATDisk<'a> {
+// We only specify one lifetime parameter here, and all of the
+// structure members have that same lifetime.
+//
+// This is because of how the library is currently used and expected
+// to be used.  We build the FATDisk structure from a u8 stream or
+// complete byte slice at the start of the application.  Individual
+// components of FATDisk aren't expected to be built from separate
+// byte slices that don't share the same memory.
+//
+// But we now explicitly name the lifetime something other than 'a to
+// make it clear what that data is and why the relationship exists.
+pub struct FATDisk<'underlying_raw_data> {
     /// The FAT boot sector
-    pub fat_boot_sector: FATBootSector<'a>,
+    pub fat_boot_sector: FATBootSector<'underlying_raw_data>,
 
     /// The actual File Allocation Table
-    pub fat: FAT<'a>,
+    pub fat: FAT<'underlying_raw_data>,
 
     /// The backup File Allocation Table
-    pub backup_fat: Option<FAT<'a>>,
+    pub backup_fat: Option<FAT<'underlying_raw_data>>,
 
     /// The root directory table
     pub directory_table: FATDirectory,
 
     /// The data region of the FAT disk
-    pub data_region: &'a [u8],
+    pub data_region: &'underlying_raw_data [u8],
 
     /// The data region of the FAT disk as clusters
-    pub data_region_as_clusters: Vec<&'a [u8]>,
+    pub data_region_as_clusters: Vec<&'underlying_raw_data [u8]>,
 }
 
 impl SanityCheck for FATDisk<'_> {
@@ -80,7 +91,7 @@ impl Display for FATDisk<'_> {
 
 /// A normal DOS 3.x FAT boot sector
 /// Eleven bytes total
-pub struct DOS3FATBootSector<'a> {
+pub struct DOS3FATBootSector<'underlying_raw_data> {
     /// A three-byte jump instruction and (possible) NOP combination
     pub jump_instruction: u8,
     /// The location to jump to
@@ -89,7 +100,7 @@ pub struct DOS3FATBootSector<'a> {
     /// A single NOP instruction, 0x90
     pub nop_instruction: u8,
     /// eight byte OEM name
-    pub oem_name: &'a [u8],
+    pub oem_name: &'underlying_raw_data [u8],
 }
 
 impl Display for DOS3FATBootSector<'_> {
@@ -118,14 +129,14 @@ impl SanityCheck for DOS3FATBootSector<'_> {
 
 /// A normal DOS 2.x FAT boot sector
 /// Eleven bytes total
-pub struct DOS2FATBootSector<'a> {
+pub struct DOS2FATBootSector<'underlying_raw_data> {
     /// A three-byte jump instruction (near jump)
     pub jump_instruction: u8,
     /// The location to jump to
     /// TODO: This is an unsigned value.  Figure out if it is a relative jump or not
     pub jump_location: u16,
     /// eight byte OEM name
-    pub oem_name: &'a [u8],
+    pub oem_name: &'underlying_raw_data [u8],
 }
 
 impl Display for DOS2FATBootSector<'_> {
@@ -153,16 +164,16 @@ impl SanityCheck for DOS2FATBootSector<'_> {
 
 /// Atari ST FAT Disk Boot Sector
 /// Eleven bytes total
-pub struct AtariSTFATBootSector<'a> {
+pub struct AtariSTFATBootSector<'underlying_raw_data> {
     /// 68000 BRA.S instruction (0x60, ...)
     pub jump_instruction: u8,
     /// The location to jump to
     /// TODO: This is an unsigned value, double check it's not a relative jump
     pub jump_location: u8,
     /// six byte OEM name
-    pub oem_name: &'a [u8],
+    pub oem_name: &'underlying_raw_data [u8],
     /// three byte serial number
-    pub serial_number: &'a [u8],
+    pub serial_number: &'underlying_raw_data [u8],
 }
 
 impl Display for AtariSTFATBootSector<'_> {
@@ -175,15 +186,15 @@ impl Display for AtariSTFATBootSector<'_> {
 /// Generic FAT Disk Boot Sector
 /// TODO: This should be refactored out after the boot sector parsing is refactored
 /// Eleven bytes total
-pub struct GenericFATBootSector<'a> {
+pub struct GenericFATBootSector<'underlying_raw_data> {
     /// Empty jump instruction (0x00)
     pub jump_instruction: u8,
     /// The empty jump location (0x00)
     pub jump_location: u8,
     /// six byte OEM name
-    pub oem_name: &'a [u8],
+    pub oem_name: &'underlying_raw_data [u8],
     /// three byte serial number
-    pub serial_number: &'a [u8],
+    pub serial_number: &'underlying_raw_data [u8],
 }
 
 impl Display for GenericFATBootSector<'_> {
@@ -199,18 +210,18 @@ impl Display for GenericFATBootSector<'_> {
 /// FAT boot sector enum that can contain either a DOS 2.x boot sector or DOS 3.x boot sector
 /// TODO: The BIOS Parameter Block actually starts at 0x0B (byte 12), right now these
 /// data structures only contain two or three bytes, they should contain eleven bytes
-pub enum FATBootSectorStart<'a> {
+pub enum FATBootSectorStart<'underlying_raw_data> {
     /// A DOS3 boot sector (short jump) (also seen on DOS 1.1)
-    DOS3(DOS3FATBootSector<'a>),
+    DOS3(DOS3FATBootSector<'underlying_raw_data>),
     /// A DOS2 boot sector (short jump)
-    DOS2(DOS2FATBootSector<'a>),
+    DOS2(DOS2FATBootSector<'underlying_raw_data>),
     /// An Atari ST boot sector (starts with 0x60, some values big-endian encoded)
-    ST(AtariSTFATBootSector<'a>),
+    ST(AtariSTFATBootSector<'underlying_raw_data>),
 
     /// A Generic FAT boot sector
     // TODO: Don't assign this enum until we parse the media descriptor,
     //       need to refactor the parsing
-    Generic(GenericFATBootSector<'a>),
+    Generic(GenericFATBootSector<'underlying_raw_data>),
 }
 
 impl Display for FATBootSectorStart<'_> {
@@ -255,9 +266,9 @@ impl Display for FATBootSectorSignature {
 /// by the BIOS Parameter Block
 /// The first eleven bytes are company or version dependent
 /// The BIOS Parameter Blocks starts at offset eleven after that
-pub struct FATBootSector<'a> {
+pub struct FATBootSector<'underlying_raw_data> {
     /// The BIOS Parameter Block
-    pub fat_boot_sector_start: FATBootSectorStart<'a>,
+    pub fat_boot_sector_start: FATBootSectorStart<'underlying_raw_data>,
     /// The BIOS Paramter block
     /// Contains information about sector and cluster size and media types
     pub bios_parameter_block: BIOSParameterBlock,
@@ -733,6 +744,17 @@ pub fn parse_data_region_as_clusters(
 /// This is done using the technique in FAT Type Determination
 /// from the Microsoft Extensible Firmware Initiative
 /// FAT32 File System Specification.
+// We are allowing a manual div_ceil calculation here.  This
+// calculation is the first line in the function:
+// let root_dir_sectors = ...
+//
+// The next release will have a rework of bytes_per_logical_sector
+// into an enum and some additional testing around fat_type.  That
+// changes the API so it is split up into two commits.
+// div_ceil and the below equation panic with different errors when
+// the divisor is equal to zero.  The refactor will prevent this but
+// there needs to be additional review.
+#[allow(clippy::manual_div_ceil)]
 pub fn fat_type(bpb: &BIOSParameterBlock) -> FATType {
     let root_dir_sectors = ((bpb.maximum_number_of_root_directory_entries * 32)
         + (bpb.bytes_per_logical_sector - 1))
@@ -773,11 +795,11 @@ pub fn fat_type(bpb: &BIOSParameterBlock) -> FATType {
 }
 
 /// Parse a DOS FAT image
-pub fn fat_disk_parser<'a>(
-    filesystem_type: &'a Option<String>,
+pub fn fat_disk_parser<'underlying_raw_data>(
+    filesystem_type: &'underlying_raw_data Option<String>,
     filesystem_bits: Option<u8>,
-    root_dir_loc: &'a Option<u32>,
-) -> impl Fn(&[u8]) -> IResult<&[u8], FATDisk> + 'a {
+    root_dir_loc: &'underlying_raw_data Option<u32>,
+) -> impl Fn(&[u8]) -> IResult<&[u8], FATDisk> + 'underlying_raw_data {
     // Initialize the crate
     init();
 

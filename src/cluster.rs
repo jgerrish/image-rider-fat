@@ -77,7 +77,7 @@ impl Display for FAT12ClusterEntry {
     }
 }
 
-/// Display a FAT12 cluster as a series of characters
+// /// Display a FAT12 cluster as a series of characters
 // pub fn fat_clusters_as_chars(fat_clusters: Vec<FAT12ClusterEntry>) -> String {
 // }
 
@@ -163,7 +163,7 @@ pub fn parse_fat16_value(value: u16) -> FAT16ClusterEntry {
 /// A DOS File Allocation Table (FAT)
 /// Each two-byte entry in FAT16 is little-endian
 #[derive(Debug, Eq, PartialEq)]
-pub struct FATFAT16<'a> {
+pub struct FATFAT16<'underlying_raw_data> {
     /// The FAT ID
     pub fat_id: u16,
 
@@ -187,11 +187,11 @@ pub struct FATFAT16<'a> {
     /// The fat_cluster_index isn't needed with this
     /// The raw_data includes all the File Allocation Table data, including the
     /// FAT ID and EOC marker
-    pub raw_data: &'a [u8],
+    pub raw_data: &'underlying_raw_data [u8],
 }
 
 /// Display a 16-bit File Allocation Table
-impl<'a> Display for FATFAT16<'a> {
+impl Display for FATFAT16<'_> {
     fn fmt(&self, f: &mut Formatter<'_>) -> Result {
         write!(f, "FAT ID: 0x{:X}, ", self.fat_id)?;
         write!(f, "EOC Marker: 0x{:X}, ", self.eoc_marker)?;
@@ -217,9 +217,9 @@ pub fn fat16_cluster_entry_eoc(fat_cluster_entry: FAT16ClusterEntry) -> bool {
 }
 
 /// Parse a FAT16 File Allocation Table
-pub fn fat_fat16_parser<'a>(
-    fat_boot_sector: &'a FATBootSector,
-) -> impl Fn(&[u8]) -> IResult<&[u8], FATFAT16> + 'a {
+pub fn fat_fat16_parser<'underlying_raw_data>(
+    fat_boot_sector: &'underlying_raw_data FATBootSector,
+) -> impl Fn(&[u8]) -> IResult<&[u8], FATFAT16> + 'underlying_raw_data {
     move |i| {
         let mut cnt = 0;
         let start_index = i;
@@ -282,7 +282,7 @@ pub fn fat_fat16_parser<'a>(
 /// A DOS File Allocation Table (FAT)
 /// Each two-byte entry in FAT16 is little-endian
 #[derive(Debug, Eq, PartialEq)]
-pub struct FATFAT12<'a> {
+pub struct FATFAT12<'underlying_raw_data> {
     /// The FAT ID
     pub fat_id: u16,
     /// The FAT end-of-cluster-chain marker
@@ -309,11 +309,11 @@ pub struct FATFAT12<'a> {
     /// The fat_cluster_index isn't needed with this
     /// The raw_data includes all the File Allocation Table data, including the
     /// FAT ID and EOC marker
-    pub raw_data: &'a [u8],
+    pub raw_data: &'underlying_raw_data [u8],
 }
 
 /// Display a File Allocation Table
-impl<'a> Display for FATFAT12<'a> {
+impl Display for FATFAT12<'_> {
     fn fmt(&self, f: &mut Formatter<'_>) -> Result {
         write!(f, "FAT ID: 0x{:X}, ", self.fat_id)?;
         write!(f, "EOC Marker: 0x{:X}, ", self.eoc_marker)?;
@@ -389,9 +389,9 @@ impl Display for FATType {
 }
 
 /// Structure to hold iterator state for iterating from bytes to 12-bit words
-pub struct Into12BitWordIter<'a> {
+pub struct Into12BitWordIter<'underlying_raw_data> {
     /// The data to generate the iterator from.
-    pub data: &'a [u8],
+    pub data: &'underlying_raw_data [u8],
     /// Index of the current posiition in the data.
     pub index: usize,
     /// temporary data needed since we're parsing groups of bytes into
@@ -400,9 +400,9 @@ pub struct Into12BitWordIter<'a> {
 }
 
 /// IntoIterator implementation to create an iterator from bytes to 12-bit words
-impl<'a> IntoIterator for FATFAT12<'a> {
+impl<'underlying_raw_data> IntoIterator for FATFAT12<'underlying_raw_data> {
     type Item = u16;
-    type IntoIter = Into12BitWordIter<'a>;
+    type IntoIter = Into12BitWordIter<'underlying_raw_data>;
 
     /// Build an iterator for this cluster chain
     fn into_iter(self) -> Self::IntoIter {
@@ -414,10 +414,10 @@ impl<'a> IntoIterator for FATFAT12<'a> {
     }
 }
 
-impl<'a> FATFAT12<'a> {
+impl<'underlying_raw_data> FATFAT12<'underlying_raw_data> {
     /// Build an iterator for this cluster chain
     /// The iteration starts at cluster number cluster
-    pub fn into_iter_from_cluster(self, cluster: usize) -> Into12BitWordIter<'a> {
+    pub fn into_iter_from_cluster(self, cluster: usize) -> Into12BitWordIter<'underlying_raw_data> {
         if (cluster % 2) == 0 {
             // This is the easy case, just go to the index, no intermediate value
             Into12BitWordIter {
@@ -485,32 +485,32 @@ impl Iterator for Into12BitWordIter<'_> {
 
 /// The data structure to iterate through cluster entries
 // TODO: Rename some of these iterator structures, can be integrated elsewhere
-pub struct FAT12ClusterChain<'a> {
+pub struct FAT12ClusterChain<'underlying_raw_data> {
     /// End of Chain marker for this cluster chain
     pub eoc_marker: u16,
     /// The raw cluster data
     /// TODO: Decide on the preferred interface
     /// TODO: Another approach may be to use nom and keep track of the
     /// "i" value as the pointer
-    pub raw_data: &'a [u16],
+    pub raw_data: &'underlying_raw_data [u16],
 }
 
 /// The iterator state structure for iterating from 12-bit words to FAT12ClusterEntry values
-pub struct IntoFAT12ClusterChainIter<'a> {
+pub struct IntoFAT12ClusterChainIter<'underlying_raw_data> {
     /// The cluster chain entries to generate the iterator from.
-    pub data: &'a [u16],
+    pub data: &'underlying_raw_data [u16],
     /// index of the current position in the data.
     pub index: usize,
     /// The EOC marker for this FAT.
     pub eoc_marker: u16,
 }
 
-impl<'a> IntoIterator for FAT12ClusterChain<'a> {
+impl<'underlying_raw_data> IntoIterator for FAT12ClusterChain<'underlying_raw_data> {
     type Item = FAT12ClusterEntry;
-    type IntoIter = IntoFAT12ClusterChainIter<'a>;
+    type IntoIter = IntoFAT12ClusterChainIter<'underlying_raw_data>;
 
     /// Build an iterator for this cluster chain
-    fn into_iter(self) -> IntoFAT12ClusterChainIter<'a> {
+    fn into_iter(self) -> IntoFAT12ClusterChainIter<'underlying_raw_data> {
         IntoFAT12ClusterChainIter {
             data: self.raw_data,
             index: 0,
@@ -519,10 +519,13 @@ impl<'a> IntoIterator for FAT12ClusterChain<'a> {
     }
 }
 
-impl<'a> FAT12ClusterChain<'a> {
+impl<'underlying_raw_data> FAT12ClusterChain<'underlying_raw_data> {
     /// Build an iterator for this cluster chain
     /// The iteration starts at cluster number cluster
-    pub fn into_iter_from_cluster(self, cluster: usize) -> IntoFAT12ClusterChainIter<'a> {
+    pub fn into_iter_from_cluster(
+        self,
+        cluster: usize,
+    ) -> IntoFAT12ClusterChainIter<'underlying_raw_data> {
         IntoFAT12ClusterChainIter {
             data: self.raw_data,
             index: cluster,
@@ -562,9 +565,9 @@ pub fn fat12_cluster_entry_eoc(fat_cluster_entry: FAT12ClusterEntry) -> bool {
 /// Parse a FAT12 File Allocation Table
 /// TODO: This can be refactored using the new iterators
 ///       or a supplementary interface can be supplied
-pub fn fat_fat12_parser<'a>(
-    fat_boot_sector: &'a FATBootSector,
-) -> impl Fn(&[u8]) -> IResult<&[u8], FATFAT12> + 'a {
+pub fn fat_fat12_parser<'underlying_raw_data>(
+    fat_boot_sector: &'underlying_raw_data FATBootSector,
+) -> impl Fn(&[u8]) -> IResult<&[u8], FATFAT12> + 'underlying_raw_data {
     move |i| {
         let start_index = i;
         let (i, res) = little_endian_12_bit_parser(i)?;
@@ -663,17 +666,17 @@ pub fn fat_fat12_parser<'a>(
 }
 
 /// Structure to hold iterator state for iterating from bytes to 16-bit words
-pub struct Into16BitWordIter<'a> {
+pub struct Into16BitWordIter<'underlying_raw_data> {
     /// The data to generate the iterator from.
-    pub data: &'a [u8],
+    pub data: &'underlying_raw_data [u8],
     /// Index of the current posiition in the data.
     pub index: usize,
 }
 
 /// IntoIterator implementation to create an iterator from bytes to 16-bit words
-impl<'a> IntoIterator for FATFAT16<'a> {
+impl<'underlying_raw_data> IntoIterator for FATFAT16<'underlying_raw_data> {
     type Item = u16;
-    type IntoIter = Into16BitWordIter<'a>;
+    type IntoIter = Into16BitWordIter<'underlying_raw_data>;
 
     /// Build an iterator for this cluster chain
     fn into_iter(self) -> Self::IntoIter {
@@ -684,10 +687,10 @@ impl<'a> IntoIterator for FATFAT16<'a> {
     }
 }
 
-impl<'a> FATFAT16<'a> {
+impl<'underlying_raw_data> FATFAT16<'underlying_raw_data> {
     /// Build an iterator for this cluster chain
     /// The iteration starts at cluster number cluster
-    pub fn into_iter_from_cluster(self, cluster: usize) -> Into16BitWordIter<'a> {
+    pub fn into_iter_from_cluster(self, cluster: usize) -> Into16BitWordIter<'underlying_raw_data> {
         // This is the easy case, just go to the index, no intermediate value
         Into16BitWordIter {
             data: self.raw_data,
@@ -720,32 +723,32 @@ impl Iterator for Into16BitWordIter<'_> {
 
 /// The data structure to iterate through cluster entries
 // TODO: Rename some of these iterator structures, can be integrated elsewhere
-pub struct FAT16ClusterChain<'a> {
+pub struct FAT16ClusterChain<'underlying_raw_data> {
     /// End of Chain marker for this cluster chain
     pub eoc_marker: u16,
     /// The raw cluster data
     /// TODO: Decide on the preferred interface
     /// TODO: Another approach may be to use nom and keep track of the
     /// "i" value as the pointer
-    pub raw_data: &'a [u16],
+    pub raw_data: &'underlying_raw_data [u16],
 }
 
 /// The iterator state structure for iterating from 12-bit words to FAT12ClusterEntry values
-pub struct IntoFAT16ClusterChainIter<'a> {
+pub struct IntoFAT16ClusterChainIter<'underlying_raw_data> {
     /// The cluster chain entries to generate the iterator from.
-    pub data: &'a [u16],
+    pub data: &'underlying_raw_data [u16],
     /// index of the current position in the data.
     pub index: usize,
     /// The EOC marker for this FAT.
     pub eoc_marker: u16,
 }
 
-impl<'a> IntoIterator for FAT16ClusterChain<'a> {
+impl<'underlying_raw_data> IntoIterator for FAT16ClusterChain<'underlying_raw_data> {
     type Item = FAT16ClusterEntry;
-    type IntoIter = IntoFAT16ClusterChainIter<'a>;
+    type IntoIter = IntoFAT16ClusterChainIter<'underlying_raw_data>;
 
     /// Build an iterator for this cluster chain
-    fn into_iter(self) -> IntoFAT16ClusterChainIter<'a> {
+    fn into_iter(self) -> IntoFAT16ClusterChainIter<'underlying_raw_data> {
         IntoFAT16ClusterChainIter {
             data: self.raw_data,
             index: 0,
@@ -754,10 +757,13 @@ impl<'a> IntoIterator for FAT16ClusterChain<'a> {
     }
 }
 
-impl<'a> FAT16ClusterChain<'a> {
+impl<'underlying_raw_data> FAT16ClusterChain<'underlying_raw_data> {
     /// Build an iterator for this cluster chain
     /// The iteration starts at cluster number cluster
-    pub fn into_iter_from_cluster(self, cluster: usize) -> IntoFAT16ClusterChainIter<'a> {
+    pub fn into_iter_from_cluster(
+        self,
+        cluster: usize,
+    ) -> IntoFAT16ClusterChainIter<'underlying_raw_data> {
         IntoFAT16ClusterChainIter {
             data: self.raw_data,
             index: cluster,
@@ -791,11 +797,11 @@ impl Iterator for IntoFAT16ClusterChainIter<'_> {
 /// The actual File Allocation Table in the FAT filesystem
 /// This project only supports older filesystems
 #[derive(Debug, Eq, PartialEq)]
-pub enum FAT<'a> {
+pub enum FAT<'underlying_raw_data> {
     /// FAT12 File Allocation Table
-    FAT12(FATFAT12<'a>),
+    FAT12(FATFAT12<'underlying_raw_data>),
     /// FAT16 File Allocation Table
-    FAT16(FATFAT16<'a>),
+    FAT16(FATFAT16<'underlying_raw_data>),
     /// Unknown FAT filesystem type
     Unknown,
 }

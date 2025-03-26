@@ -152,7 +152,7 @@ mod tests {
         }
     }
 
-    fn build_dos3_boot_sector<'a>() -> DOS3FATBootSector<'a> {
+    fn build_dos3_boot_sector<'underlying_raw_data>() -> DOS3FATBootSector<'underlying_raw_data> {
         DOS3FATBootSector {
             jump_instruction: 0xEB,
             jump_location: 0x3C,
@@ -192,7 +192,11 @@ mod tests {
     }
 
     /// Build a FAT disk with a file with data
-    fn build_disk_with_file<'a>(filename: &str, filedata: &'a [u8], filesize: u32) -> FATDisk<'a> {
+    fn build_disk_with_file<'underlying_raw_data>(
+        filename: &str,
+        filedata: &'underlying_raw_data [u8],
+        filesize: u32,
+    ) -> FATDisk<'underlying_raw_data> {
         let dos3_boot_sector = build_dos3_boot_sector();
         let bios_parameter_block = build_bios_parameter_block();
         let fat_boot_sector_start = FATBootSectorStart::DOS3(dos3_boot_sector);
